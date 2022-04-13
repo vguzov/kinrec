@@ -1,6 +1,5 @@
 import numpy as np
 import kinz
-import asyncio
 import logging
 import time
 import io
@@ -8,9 +7,9 @@ import os
 import json
 import shutil
 import psutil
+import base64
 from PIL import Image
 from glob import glob
-import base64
 from copy import deepcopy
 from skimage.transform import rescale
 from threading import Thread
@@ -18,6 +17,7 @@ from .net import NetHandler
 from videoio import VideoWriter, Uint16Writer
 from typing import Tuple, Sequence, List, Optional, IO
 from dataclasses import dataclass
+from argparse import ArgumentParser
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("recorder")
@@ -226,11 +226,11 @@ class MainController:
         path: str
         recording_id: int
 
-    def __init__(self, net_handler: NetHandler):
+    def __init__(self, net_handler: NetHandler, recordings_dir = "kinrec/recordings"):
         self.net = net_handler
         self.active = False
         self.kinect = Kinect()
-        self.recordings_dir = "kinrec/recordings"
+        self.recordings_dir = recordings_dir
         self.recording_expected_duration = None
         self.recording_metadata = None
         self.recorder: Optional[RecorderThread] = None
@@ -526,11 +526,26 @@ class MainController:
                 self.net.send({"type": "status", "cmd_report": statusd(msgt),
                                "kinect_status": kin_state, info: info, "transferring": len(self.sendfile_queue)>0,
                                "optionals": optionals})
+            elif msgt == "shutdown":
+                self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
+                logger.info("Received shutdown message, attempting to call 'shutdown -s now'")
+                os.system("shutdown -s now")
             else:
                 logger.warning(f"Unrecognized command '{msgt}'")
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt, "recorder fail", "Unrecognized command")})
 
 
 
+if __name__ == "__main__":
+    parser = ArgumentParser("Kinect recorder")
+    parser.add_argument("-rd", "--recdir", default="kinrec/recordings", help="Folder where all the recordings are stored")
+    parser.add_argument("-s", "--server", default="kinrec.cv:4400", help="Server address and port")
+
+    args = parser.parse_args()
+    logger.info("Starting network")
+    net = NetHandler(args.server)
+    logger.info("Starting main controller")
+    controller = MainController(net_handler=net, recordings_dir=args.recdir)
+    controller.main_loop()
 
 
