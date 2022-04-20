@@ -20,15 +20,36 @@ class RecorderComm:
         def __init__(self, cmd_report):
             super().__init__()
             self.cmd_report = cmd_report
+
     class FileReceiveException(Exception):
         pass
-    ControllerCallbacks = namedtuple("ControllerCallbacks", "set_status set_calibration set_kinect_params_reply ")
+
+    callback_names = [
+        "get_status_reply",
+        "get_kinect_calibration_reply",
+        "start_preview_reply",
+        "get_preview_frame_reply",
+        "stop_preview_reply",
+        "start_recording_reply",
+        "stop_recording_reply",
+        "get_recordings_list_reply",
+        "collect_reply",
+        "delete_recording_reply",
+        "stop_collect_reply",
+        "shutdown_reply",
+        "reboot_reply",
+        "file_receive_start",
+        "file_receive_end",
+        "file_receive_update"
+    ]
+    ControllerCallbacks = namedtuple("ControllerCallbacks", " ".join(callback_names))
     unmatched_answers = ["collect_file_start", "collect_file_end"]
 
-    def __init__(self, websocket, controller, recorder_id, fields_ttl = 100.):
+    def __init__(self, websocket, controller, recorder_id, fields_ttl=100.):
         self._recorder_id = recorder_id
         self._websocket = websocket
         self._kinect_id = None
+        self._event_loop_active = False
         self._kinect_calibration = None
         self._recordings_list = None
         self._sent_cmds = []
@@ -45,10 +66,12 @@ class RecorderComm:
         self._register_callbacks(controller)
 
     def _register_callbacks(self, controller):
-        self.controller_callbacks = self.ControllerCallbacks(
-            partial(controller.comm_set_recorder_status, self._recorder_id),
-
-        )
+        callbacks_list = []
+        for callback_name in self.callback_names:
+            callback = getattr(controller, "comm_" + callback_name)
+            callback = partial(callback, self._recorder_id)
+            callbacks_list.append(callback)
+        self.controller_callbacks = self.ControllerCallbacks(*callbacks_list)
 
     def _match_answer(self, cmd_report):
         cmdt = cmd_report["cmd"]
@@ -60,6 +83,18 @@ class RecorderComm:
             raise RecorderComm.UnmatchedAnswerException(cmd_report)
         else:
             return None
+
+    async def stop_event_loop(self):
+        self._event_loop_active = False
+
+    @property
+    def event_loop_active(self) -> bool:
+        return self._event_loop_active
+
+    async def start_event_loop(self):
+        self._event_loop_active = True
+        while self._event_loop_active:
+            await self.process_events()
 
     async def process_events(self):
         # if self._kinect_id is None:
@@ -89,20 +124,23 @@ class RecorderComm:
                     if cmdt == "get_status":
                         self._kinect_status = msg["kinect_status"]
                         self._recorder_transferring = msg["transferring"]
-                        self.controller_callbacks.get_status_reply(True, self._kinect_status, self._recorder_transferring, msg["info"], msg["optionals"])
+                        self.controller_callbacks.get_status_reply(True, self._kinect_status,
+                                                                   self._recorder_transferring, msg["info"],
+                                                                   msg["optionals"])
                     elif cmdt == "get_kinect_calibration":
                         if cmd_result == "OK":
                             self._kinect_id = msg["kinect_id"]
                             self._kinect_calibration = msg["kinect_calibration"]
                             logger.info(f"Got info from Kinect: id {self._kinect_id}")
-                            self.controller_callbacks.get_kinect_calibration_reply(True, self._kinect_id, self._kinect_calibration)
+                            self.controller_callbacks.get_kinect_calibration_reply(True, self._kinect_id,
+                                                                                   self._kinect_calibration)
                         else:
                             self.controller_callbacks.get_kinect_calibration_reply(False, None, None, info=cmd_info)
                     elif cmdt == "set_kinect_params":
                         self.controller_callbacks.set_kinect_params_reply(True)
                     elif cmdt == "start_preview":
                         self.controller_callbacks.start_preview_reply(cmd_result == "OK",
-                                                                     info=None if cmd_result == "OK" else cmd_info)
+                                                                      info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "get_preview_frame":
                         if cmd_result == "OK":
                             data = msg["data"]
@@ -114,13 +152,13 @@ class RecorderComm:
                             self.controller_callbacks.get_preview_frame_reply(False, info=cmd_info)
                     elif cmdt == "stop_preview":
                         self.controller_callbacks.stop_preview_reply(cmd_result == "OK",
-                                                                     info = None if cmd_result == "OK" else cmd_info)
+                                                                     info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "start_recording":
                         self.controller_callbacks.start_recording_reply(cmd_result == "OK",
-                                                                     info=None if cmd_result == "OK" else cmd_info)
+                                                                        info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "stop_recording":
                         self.controller_callbacks.stop_recording_reply(cmd_result == "OK",
-                                                                        info=None if cmd_result == "OK" else cmd_info)
+                                                                       info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "get_recordings_list":
                         if cmd_result == "OK":
                             self.controller_callbacks.get_recordings_list_reply(True, msg['recordings'])
@@ -128,22 +166,22 @@ class RecorderComm:
                             self.controller_callbacks.get_recordings_list_reply(False, info=cmd_info)
                     elif cmdt == "collect":
                         self.controller_callbacks.collect_reply(cmd_result == "OK",
-                                                                     info=None if cmd_result == "OK" else cmd_info)
+                                                                info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "delete_recording":
                         self.controller_callbacks.delete_recording_reply(cmd_result == "OK",
-                                                                info=None if cmd_result == "OK" else cmd_info)
+                                                                         info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "stop_collect":
                         if cmd_result == "OK":
                             self._file_collect_end()
                         self.controller_callbacks.stop_collect_reply(cmd_result == "OK",
-                                                                info=None if cmd_result == "OK" else cmd_info)
+                                                                     info=None if cmd_result == "OK" else cmd_info)
 
                     elif cmdt == "shutdown":
                         self.controller_callbacks.shutdown_reply(cmd_result == "OK",
-                                                                     info=None if cmd_result == "OK" else cmd_info)
+                                                                 info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "reboot":
                         self.controller_callbacks.reboot_reply(cmd_result == "OK",
-                                                                 info=None if cmd_result == "OK" else cmd_info)
+                                                               info=None if cmd_result == "OK" else cmd_info)
                     if waiting_event is not None:
                         waiting_event.set()
             else:
@@ -174,7 +212,9 @@ class RecorderComm:
             else:
                 self._current_file_descriptor.write(msg)
                 self._current_file_received += len(msg)
-                self.controller_callbacks.file_receive_update(self._current_file_received)
+                self.controller_callbacks.file_receive_update(self._current_file_rec_id,
+                                                              self._current_file_rel_path,
+                                                              self._current_file_received)
 
     def _file_collect_end(self):
         if self._current_file_descriptor is not None:
@@ -189,7 +229,8 @@ class RecorderComm:
                          f"should be {self._current_file_size}")
         self.controller_callbacks.file_receive_end(self._current_file_rec_id,
                                                    self._current_file_rel_path,
-                                                   self._current_file_size)
+                                                   self._current_file_size,
+                                                   self._current_file_received)
         self._current_file_received = 0
         self._current_file_size = None
         self._current_file_rec_id = None
@@ -203,13 +244,13 @@ class RecorderComm:
         return self._kinect_id
 
     async def set_kinect_params(self, rgb_res, depth_wfov, depth_binned, fps, sync_mode):
-        await self._send({"type": "set_kinect_params", "rgb_res":rgb_res, 'depth_wfov':depth_wfov,
-                          'depth_binned': depth_binned, 'fps': fps, 'sync_mode':sync_mode})
+        await self._send({"type": "set_kinect_params", "rgb_res": rgb_res, 'depth_wfov': depth_wfov,
+                          'depth_binned': depth_binned, 'fps': fps, 'sync_mode': sync_mode})
 
     async def get_kinect_calibration(self):
         await self._send({"type": "get_kinect_calibration"})
 
-    async def get_status(self, disk_space = False, battery = False, recording_fps = False):
+    async def get_status(self, disk_space=False, battery=False, recording_fps=False):
         optionals = []
         if disk_space:
             optionals.append("disk_space")
@@ -222,7 +263,7 @@ class RecorderComm:
     async def start_preview(self):
         await self._send({"type": "start_preview"})
 
-    async def get_preview_frame(self, scale:Union[float, int] = 1):
+    async def get_preview_frame(self, scale: Union[float, int] = 1):
         await self._send({"type": "get_preview_frame", "scale": scale})
 
     async def stop_preview(self):
@@ -264,8 +305,3 @@ class RecorderComm:
 
     def _init_kinect_info(self):
         self._send({"type": "get_kinect_calibration"})
-
-
-
-
-
