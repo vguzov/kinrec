@@ -66,7 +66,7 @@ class Kinect:
         self.update_params()
         self.calibration = None
         self.depth2d3dmap = None
-        self.id = None
+        self._id = None
         self.active = False
 
     def update_params(self, resolution=1440, wfov=False, binned=False, framerate=30, sync_mode="none"):
@@ -143,7 +143,7 @@ class Kinect:
         if self.calibration is None:
             self.calibration = self.device.get_full_calibration()
             self.depth2d3dmap = self.device.get_depth2d3dmap()
-            self.id = self.device.get_serial_number()
+            self._id = self.device.get_serial_number()
 
     def stop(self):
         if not self.active:
@@ -163,9 +163,16 @@ class Kinect:
                 "depth2color": {"R": None, "t": None},
                 "params": self.params}
 
+    @property
+    def id(self) -> str:
+        if self._id is None:
+            self._id = self.device.get_serial_number()
+        return self._id
+
+
 
 class RecorderThread(Thread):
-    def __init__(self, kinect, recording_dir, expected_timelen=None, fps_window_size=20, final_callback=None):
+    def __init__(self, kinect, recording_dir, expected_timelen=None, fps_window_size=20, final_callback=None, start_delay = 0):
         super().__init__()
         self.kinect = kinect
         self.recording_dir = recording_dir
@@ -177,6 +184,7 @@ class RecorderThread(Thread):
         self.depth_timestamps = []
         self.final_callback = final_callback
         self.exception = None
+        self.start_delay = start_delay
 
     def run(self) -> None:
         with VideoWriter(os.path.join(self.recording_dir, "color.mpeg"), resolution=self.kinect.color_resolution,
@@ -189,6 +197,9 @@ class RecorderThread(Thread):
             self.last_times = np.zeros(self.fps_window_size)
             stime = time.time()
             self.last_times[-1] = stime
+            if self.start_delay > 0:
+                logger.info(f"Waiting for {self.start_delay:.2f} seconds before starting")
+                time.sleep(self.start_delay)
             while self.active:
                 try:
                     color, depth, color_ts, depth_ts = self.kinect.get_next_frame()
@@ -210,7 +221,7 @@ class RecorderThread(Thread):
 
     @property
     def sliding_window_fps(self):
-        return 1/(self.last_times[1:]-self.last_times[:-1]).mean()
+        return 1 / (self.last_times[1:] - self.last_times[:-1]).mean()
 
     def close_recording(self):
         self.active = False
@@ -226,7 +237,7 @@ class MainController:
         path: str
         recording_id: int
 
-    def __init__(self, net_handler: NetHandler, recordings_dir = "kinrec/recordings"):
+    def __init__(self, net_handler: NetHandler, recordings_dir="kinrec/recordings"):
         self.net = net_handler
         self.active = False
         self.kinect = Kinect()
@@ -264,7 +275,8 @@ class MainController:
     def get_recording_dirname(recording_id, recording_name):
         return f"{recording_id}_{recording_name}"
 
-    def start_recording(self, recording_id, recording_name, recording_duration, server_time, participating_kinects):
+    def start_recording(self, recording_id, recording_name, recording_duration, server_time, participating_kinects,
+            start_delay = 0):
         curr_recording_dir = os.path.join(self.recordings_dir, self.get_recording_dirname(recording_id, recording_name))
         if os.path.exists(curr_recording_dir):
             raise MainController.RecordingExistsException()
@@ -275,7 +287,7 @@ class MainController:
         self.recording_metadata = {"id": recording_id, "name": recording_name, "server_time": server_time,
                                    "participating_kinects": list(participating_kinects),
                                    "kinect_id": self.kinect.id, "kinect_calibration": self.kinect.calibration_dict}
-        self.recorder = RecorderThread(self.kinect, curr_recording_dir, recording_duration)
+        self.recorder = RecorderThread(self.kinect, curr_recording_dir, recording_duration, start_delay=start_delay)
         logger.info("Starting recorder thread")
         self.recorder.run()
 
@@ -427,7 +439,7 @@ class MainController:
             elif msgt == "start_recording":
                 try:
                     self.start_recording(msg["recording_id"], msg["recording_name"], msg["recording_duration"],
-                                         msg["server_time"], msg["participating_kinects"])
+                                         msg["server_time"], msg["participating_kinects"], msg["start_delay"])
                 except MainController.RecordingExistsException:
                     self.net.send({"type": "pong", "cmd_report": statusd(msgt, "recorder fail",
                                                                          "Recording already exists")})
@@ -485,7 +497,7 @@ class MainController:
                         self.kinect.stop()
                 except Kinect.FrameGetFailException:
                     self.net.send({"type": "kinect_calibration", "cmd_report": statusd(msgt, "kinect fail",
-                                                                                   "Failed to activate Kinect")})
+                                                                                       "Failed to activate Kinect")})
                 else:
                     self.net.send({"type": "kinect_calibration", "cmd_report": statusd(msgt),
                                    "kinect_calibration": calibration_dict})
@@ -524,21 +536,25 @@ class MainController:
                             percent = battery.percent
                             optionals["battery"] = {"percent": percent, "plugged": plugged}
                 self.net.send({"type": "status", "cmd_report": statusd(msgt),
-                               "kinect_status": kin_state, info: info, "transferring": len(self.sendfile_queue)>0,
+                               "kinect_status": kin_state, info: info, "transferring": len(self.sendfile_queue) > 0,
                                "optionals": optionals})
             elif msgt == "shutdown":
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
                 logger.info("Received shutdown message, attempting to call 'shutdown -s now'")
                 os.system("shutdown -s now")
+            elif msgt == "reboot":
+                self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
+                logger.info("Received reboot message, attempting to call 'shutdown -r now'")
+                os.system("shutdown -r now")
             else:
                 logger.warning(f"Unrecognized command '{msgt}'")
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt, "recorder fail", "Unrecognized command")})
 
 
-
 if __name__ == "__main__":
     parser = ArgumentParser("Kinect recorder")
-    parser.add_argument("-rd", "--recdir", default="kinrec/recordings", help="Folder where all the recordings are stored")
+    parser.add_argument("-rd", "--recdir", default="kinrec/recordings",
+                        help="Folder where all the recordings are stored")
     parser.add_argument("-s", "--server", default="kinrec.cv:4400", help="Server address and port")
 
     args = parser.parse_args()
@@ -547,5 +563,3 @@ if __name__ == "__main__":
     logger.info("Starting main controller")
     controller = MainController(net_handler=net, recordings_dir=args.recdir)
     controller.main_loop()
-
-
