@@ -1,10 +1,14 @@
 from functools import partial
+import logging
 
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 
 from .internal import RecorderState
 from .tk_wrappers import FocusButton, FocusCheckButton, FocusLabelFrame
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("view")
 
 
 class KinRecView(ttk.Frame):
@@ -25,13 +29,16 @@ class KinRecView(ttk.Frame):
             "NFOV unbinned  (640x576)": (640, 576),   "NFOV binned    (320x288)": (320, 288)
         }
         self._fps = [5, 10, 15, 30]
+
+        # Variables to store state of the system
         self._state_template_kinect = "Status: {}\nFree space: {:03d} GB\nBatt. power: {:03d}%"
         self._state_template_server = "Status: {}"
-        self._state_kinects = self.number_of_kinects * [RecorderState()]
-        self._state_kinect_buttons = []
-        self._state_kinect_labels = []
+        self._recorders = [{
+            "state": RecorderState(),
+            "button": None,
+            "label": None
+        } for _ in range(self.number_of_kinects)]
         self._state_server = "offline"
-        self._state_server_label = None
 
         # Styles for buttons
         s = ttk.Style()
@@ -81,7 +88,7 @@ class KinRecView(ttk.Frame):
             },
             "preview": {
                 "is_on": tk.BooleanVar(value=False),
-                "kinect_index": tk.IntVar(value=-1)
+                "recorder_index": tk.IntVar(value=-1)
             }
         }
 
@@ -169,40 +176,89 @@ class KinRecView(ttk.Frame):
         self._state_server_label.grid(row=2, column=2, padx=10, pady=1, sticky='w')
 
         # Other rows
-        for kinect_index in range(self.number_of_kinects):
-            button = FocusButton(root, text="Kinect id <None>\n(launch preview)",
-                                command=partial(self._callback_preview, kinect_index))
+        for recorder_index in range(self.number_of_kinects):
             # TODO default state tk.DISABLED
-            button.grid(row=3 + kinect_index, column=1, padx=5, pady=1, sticky='ew')
-            self._state_kinect_buttons.append(button)
+            # TODO add sorting based on kinect_id
+            self._recorders[recorder_index]["button"] = FocusButton(root, text="", command=partial(self._callback_preview, recorder_index))
+            self._recorders[recorder_index]["button"].grid(row=3 + recorder_index, column=1, padx=5, pady=1, sticky='ew')
 
-            state = tk.Label(
-                root, justify=tk.LEFT, text=self._state_template_kinect.format(
-                    self._state_kinects[kinect_index].status,
-                    self._state_kinects[kinect_index].free_space,
-                    self._state_kinects[kinect_index].bat_power
-                )
-            )
-            state.grid(row=3 + kinect_index, column=2, padx=10, pady=1, sticky='w')
-            self._state_kinect_labels.append(state)
+            self._recorders[recorder_index]["label"] = tk.Label(root, justify=tk.LEFT, text="")
+            self._recorders[recorder_index]["label"].grid(row=3 + recorder_index, column=2, padx=10, pady=1, sticky='w')
+
+            self.update_recorder_state(recorder_index, self._recorders[recorder_index]["state"])
+
     # ==================================================================================================================
 
     # =============================================== External Interfaces ==============================================
+    def set_controller(self, controller):
+        self._controller = controller
+
+    def start_preview(self, recorder_index):
+        if self.state["preview"]["is_on"].get():
+            logger.warning(f"Preview is already launched for recorder {self.state['preview']['recorder_index'].get()}")
+        else:
+            # preview is not launched
+            self.state["preview"]["is_on"].set(True)
+            self.state["preview"]["recorder_index"].set(recorder_index)
+            self.preview_frame.grid()
+            logger.info(f"launched preview for {recorder_index}")
+
+        self._update_preview_buttons_state()
+
+    def stop_preview(self, recorder_index):
+        if self.state["preview"]["is_on"].get():
+            if self.state["preview"]["recorder_index"].get() == recorder_index:
+                self.preview_frame.grid_remove()
+                self.state["preview"]["is_on"].set(False)
+                self.state["preview"]["recorder_index"].set(-1)
+                logger.info(f"stopped preview for {recorder_index}")
+            else:
+                logger.warning(f"Can't stop preview for {recorder_index}, "
+                               f"as it is launched for {self.state['preview']['recorder_index'].get()}")
+        else:
+            logger.warning("No preview is launched")
+
+        self._update_preview_buttons_state()
+
+    def set_preview_frame(self, frame):
+        pass
+
     def update_progressbar(self):
         pass
 
     def update_server_state(self):
         pass
 
-    def update_recorder_state(self, index: int, state: RecorderState):
-        # TODO change state of button based
-        self._state_kinect_buttons[index].configure(text="Kinect id <None>\n(launch preview)")
+    def update_recorder_state(self, recorder_index: int, state: RecorderState):
+        # statuses: "offline", "ready", "preview", "recording", "kin. not ready"
+        self._recorders[recorder_index]["state"] = state
+
+        if state.status in ["offline", "kin. not ready"]:
+            button_state = tk.DISABLED
+            text = f"Kinect id {state.kinect_id}\n(launch preview)"
+        elif state.status == "preview":
+            button_state = tk.NORMAL
+            text = f"Kinect id {state.kinect_id}\n(stop preview)"
+        elif state.status == "recording":
+            button_state = tk.DISABLED
+            text = f"Kinect id {state.kinect_id}\n(launch preview)"
+        elif state.status == "ready":
+            button_state = tk.NORMAL
+            text = f"Kinect id {state.kinect_id}\n(launch preview)"
+        else:
+            raise ValueError(f"Unknown recorder {recorder_index} status {state.status}")
+
+        self._recorders[recorder_index]["button"].configure(text=text)
+        self._recorders[recorder_index]["label"].configure(text=self._state_template_kinect.format(
+            state.status, state.free_space, state.bat_power
+        ))
     # ==================================================================================================================
 
     # ================================================ Button callbacks ================================================
     def _callback_apply_params(self):
         # update example
         # self._state_kinect_labels[1]['text'] = self._state_template_kinect.format("online", 300, 55)
+        self.update_recorder_state(1, RecorderState(2, "ready", 11, 22))
         pass
 
     def _callback_rgb_res(self):
@@ -217,22 +273,16 @@ class KinRecView(ttk.Frame):
     def _callback_sync(self):
         pass
 
-    def _callback_preview(self, kinect_index):
+    def _callback_preview(self, recorder_index):
         if self.state["preview"]["is_on"].get():
-            # preview is already launched
-            if self.state["preview"]["kinect_index"].get() == kinect_index:
-                self.preview_frame.grid_remove()
-                self.state["preview"]["is_on"].set(False)
-                self.state["preview"]["kinect_index"].set(-1)
-            else:
-                # This should not be reachable
-                pass
+            # Stop preview
+            # TODO self.controller.stop_preview(recorder_index)
+            self.stop_preview(recorder_index)
         else:
-            # preview is not launched
-            self.state["preview"]["is_on"].set(True)
-            self.state["preview"]["kinect_index"].set(kinect_index)
-            self.preview_frame.grid()
-        self._update_preview_buttons_state()
+            # Launch preview
+            # TODO self.controller.start_preview(recorder_index)
+            self.start_preview(recorder_index)
+
 
     def _callback_about(self):
         self.menubar.focus_set()
@@ -247,18 +297,15 @@ class KinRecView(ttk.Frame):
     # ==================================================================================================================
 
     def _update_preview_buttons_state(self):
-        is_on = self.state["preview"]["is_on"].get()
+        preview_is_on = self.state["preview"]["is_on"].get()
+        preview_recorder_index = self.state["preview"]["recorder_index"].get()
 
-        for kinect_index, (state, button) in enumerate(zip(self._state_kinects, self._state_kinect_buttons)):
-            kinect_id = state.kinect_id
-            if is_on:
-                if kinect_index ==  self.state["preview"]["kinect_index"].get():
-                    button.configure(state=tk.NORMAL)
-                    button.configure(text=f"Kinect id {kinect_id}\n(stop preview)", state=tk.NORMAL)
+        for recorder_index in range(self.number_of_kinects):
+            kinect_id = self._recorders[recorder_index]["state"].kinect_id
+            if preview_is_on:
+                if recorder_index == preview_recorder_index:
+                    self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_id}\n(stop preview)", state=tk.NORMAL)
                 else:
-                    button.configure(state=tk.DISABLED)
+                    self._recorders[recorder_index]["button"].configure(state=tk.DISABLED)
             else:
-                button.configure(text=f"Kinect id {kinect_id}\n(launch preview)", state=tk.NORMAL)
-
-    def set_controller(self, controller):
-        self._controller = controller
+                self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_id}\n(launch preview)", state=tk.NORMAL)
