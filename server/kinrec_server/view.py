@@ -1,137 +1,10 @@
-from typing import NamedTuple
 from functools import partial
 
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 
-
-
-class FocusCheckButton(tk.Checkbutton):
-    def __init__(self, *args, highlightthickness=0, **kwargs):
-        tk.Checkbutton.__init__(self, *args, highlightthickness=highlightthickness, **kwargs)
-        self.bind("<1>", lambda event: self.focus_set())
-
-
-class FocusButton(ttk.Button):
-    def __init__(self, *args, **kwargs):
-        ttk.Button.__init__(self, *args, **kwargs)
-        self.bind("<1>", lambda event: self.focus_set())
-
-
-class FocusLabelFrame(tk.LabelFrame):
-    def __init__(self, *args, highlightthickness=0, relief=tk.RIDGE, borderwidth=2, **kwargs):
-        tk.LabelFrame.__init__(self, *args, highlightthickness=highlightthickness, relief=relief,
-                               borderwidth=borderwidth, **kwargs)
-        self.bind("<1>", lambda event: self.focus_set())
-
-    def set_frame_state(self, state):
-        def set_widget_state(widget, state):
-            if widget.winfo_children is not None:
-                for w in widget.winfo_children():
-                    w.configure(state=state)
-
-        set_widget_state(self, state)
-
-
-class BoundedNumericalEntry(tk.Entry):
-    def __init__(self, master=None, min_value=None, max_value=None, variable=None,
-                 vartype=float, width=7, allow_inf=False,  **kwargs):
-        if variable is None:
-            if vartype == float:
-                self.var = tk.DoubleVar()
-            elif vartype == int:
-                self.var = tk.IntVar()
-            else:
-                self.var = tk.StringVar()
-        else:
-            self.var = variable
-
-        self.fake_var = tk.StringVar(value=self.var.get())
-        self.vartype = vartype
-        self.old_value = self.var.get()
-        self.allow_inf = allow_inf
-
-        self.min_value, self.max_value = min_value, max_value
-        self.get, self.set = self.fake_var.get, self.fake_var.set
-
-        self.validate_command = master.register(self._check_bounds)
-        tk.Entry.__init__(self, master, textvariable=self.fake_var, validate="focus", width=width,
-                          vcmd=(self.validate_command, '%P', '%d'), **kwargs)
-
-    def _check_bounds(self, instr, action_type):
-        if self.allow_inf and instr == 'INF':
-            self.fake_var.set('INF')
-            return True
-
-        if action_type == '-1':
-            try:
-                new_value = self.vartype(instr)
-            except ValueError:
-                pass
-            else:
-                if (self.min_value is None or new_value >= self.min_value) and \
-                        (self.max_value is None or new_value <= self.max_value):
-                    if new_value != self.old_value:
-                        self.old_value = self.vartype(self.fake_var.get())
-                        self.delete(0, tk.END)
-                        self.insert(0, str(self.old_value))
-                        self.var.set(self.old_value)
-                    return True
-        self.delete(0, tk.END)
-        self.insert(0, str(self.old_value))
-        mn = '-inf' if self.min_value is None else str(self.min_value)
-        mx = '+inf' if self.max_value is None else str(self.max_value)
-        messagebox.showwarning("Incorrect value in input field", f"Value for {self._name} should be in "
-                               f"[{mn}; {mx}] and of type {self.vartype.__name__}")
-
-        return False
-
-
-class RecorderState(NamedTuple):
-    kinect_id: int = None
-    status: str = "offline"  # "offline", "ready", "preview", "recording", "kin. not ready"
-    free_space: int = 0  # in GB
-    bat_power: int = 0  # 0..100
-
-
-class KinRecApp(tk.Tk):
-    def __init__(self, number_of_kinects):
-        super().__init__()
-
-        # Basic window properties
-        # self.minsize(960, 480)
-        # self.deiconify()
-        self.title("Kinect Recorder server interface")
-        # self.withdraw()
-        # self.update_idletasks()
-        # x = (self.winfo_screenwidth() - self.winfo_reqwidth()) / 2
-        # y = (self.winfo_screenheight() - self.winfo_reqheight()) / 2
-        # self.geometry("+%d+%d" % (x, y))
-
-        # Add view
-        self.view = KinRecView(parent=self, number_of_kinects=number_of_kinects)
-        # self.view.grid(row=0, column=0, padx=10, pady=10)
-
-        controller = KinRecController(number_of_kinects)
-        self.view.set_controller(controller)
-
-    # def run(self):
-    #     while True:
-    #         ret_code, ret_msg = self.view.process_event()
-    #         if ret_code == self.view.RET_CODE_ERROR:
-    #             print(f"[EVENT LOOP] GUI error {ret_msg}")
-    #         elif ret_code == self.view.RET_CODE_EXIT:
-    #             print("[EVENT LOOP] Exiting GUI")
-    #             break
-    #         else:
-    #             print("[EVENT LOOP]", ret_code, ret_msg)
-
-
-class KinRecController:
-    def __init__(self, number_of_kinects):
-        self.kinects = {
-
-        }
+from .internal import RecorderState
+from .tk_wrappers import FocusButton, FocusCheckButton, FocusLabelFrame
 
 
 class KinRecView(ttk.Frame):
@@ -170,6 +43,7 @@ class KinRecView(ttk.Frame):
         # Add menus and frames
         self._add_top_bar_menu()
         self._add_preview_canvas()
+        self._add_records_browser_frame()
         self._add_params_frame()
         self._add_recording_frame()
         self._add_state_frame()
@@ -240,6 +114,9 @@ class KinRecView(ttk.Frame):
         self.preview_frame.grid(row=1, rowspan=3, column=0, sticky="ne", padx=5, pady=5)
         self.preview_frame.grid_remove()
 
+    def _add_records_browser_frame(self):
+        pass
+
     def _add_params_frame(self):
         self.params_frame = FocusLabelFrame(self, text="Recording parameters")
         self.params_frame.grid(row=1, column=1, padx=5, pady=5, sticky='e')
@@ -295,6 +172,7 @@ class KinRecView(ttk.Frame):
         for kinect_index in range(self.number_of_kinects):
             button = FocusButton(root, text="Kinect id <None>\n(launch preview)",
                                 command=partial(self._callback_preview, kinect_index))
+            # TODO default state tk.DISABLED
             button.grid(row=3 + kinect_index, column=1, padx=5, pady=1, sticky='ew')
             self._state_kinect_buttons.append(button)
 
@@ -317,7 +195,8 @@ class KinRecView(ttk.Frame):
         pass
 
     def update_recorder_state(self, index: int, state: RecorderState):
-        pass
+        # TODO change state of button based
+        self._state_kinect_buttons[index].configure(text="Kinect id <None>\n(launch preview)")
     # ==================================================================================================================
 
     # ================================================ Button callbacks ================================================
@@ -381,13 +260,5 @@ class KinRecView(ttk.Frame):
             else:
                 button.configure(text=f"Kinect id {kinect_id}\n(launch preview)", state=tk.NORMAL)
 
-
     def set_controller(self, controller):
         self._controller = controller
-
-
-if __name__ == "__main__":
-    # Create the class
-    test_gui = KinRecApp(number_of_kinects=4)
-    # run the event loop
-    test_gui.mainloop()
