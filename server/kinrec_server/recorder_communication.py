@@ -5,6 +5,7 @@ import time
 import logging
 import base64
 import io
+import websockets
 import os
 from PIL import Image
 from collections import namedtuple
@@ -45,7 +46,7 @@ class RecorderComm:
     ControllerCallbacks = namedtuple("ControllerCallbacks", " ".join(callback_names))
     unmatched_answers = ["collect_file_start", "collect_file_end"]
 
-    def __init__(self, websocket, controller, recorder_id, fields_ttl=100.):
+    def __init__(self, websocket, controller, recorder_id, connection_close_callback):
         self._recorder_id = recorder_id
         self._websocket = websocket
         self._kinect_id = None
@@ -55,7 +56,6 @@ class RecorderComm:
         self._sent_cmds = []
         self._kinect_status = "disconnected"
         self._recorder_transferring = False
-        self._fields_ttl = fields_ttl
         self._recording_paths = {}
         self._current_file_descriptor = None
         self._current_file_size = None
@@ -64,6 +64,7 @@ class RecorderComm:
         self._current_file_rec_id = None
         # self.controller_callbacks: RecorderComm.ControllerCallbacks = None
         self._register_callbacks(controller)
+        self._connection_close_callback = connection_close_callback
 
     def _register_callbacks(self, controller):
         callbacks_list = []
@@ -84,7 +85,7 @@ class RecorderComm:
         else:
             return None
 
-    async def stop_event_loop(self):
+    def stop_event_loop(self):
         self._event_loop_active = False
 
     @property
@@ -99,7 +100,10 @@ class RecorderComm:
     async def process_events(self):
         # if self._kinect_id is None:
         #     self._init_kinect_info()
-        msg = await self._websocket.recv()
+        try:
+            msg = await self._websocket.recv()
+        except websockets.ConnectionClosed:
+            await self.close()
         if isinstance(msg, dict):
             if 'cmd_report' in msg:
                 cmd_report = msg['cmd_report']
@@ -301,7 +305,15 @@ class RecorderComm:
             logger.info(f"Sending '{data['type']}'")
             self._sent_cmds.append((data['type'], waiting_event))
             data = json.dumps(data)
-        await self._websocket.send(data)
+        try:
+            await self._websocket.send(data)
+        except websockets.ConnectionClosed:
+            await self.close()
+
+    async def close(self):
+        self.stop_event_loop()
+        await self._websocket.close()
+        self._connection_close_callback(self._recorder_id)
 
     def _init_kinect_info(self):
         self._send({"type": "get_kinect_calibration"})

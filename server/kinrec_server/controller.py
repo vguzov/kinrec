@@ -12,48 +12,30 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("controller")
 
 
-class MainController:
-    def __init__(self, server_address="kinrec.cv:4400", kinect_id_mapping: Dict[str, int] = None):
-        self.server_address = server_address
-        self._next_recorder_id = 0
-        self._connected_recorders = {}
-        self._connected_recorder_tasks = {}
-        self._loop_active = False
+class KinRecController:
+    def __init__(self, kinect_id_mapping: Dict[str, int] = None):
         self._kinect_id_mapping = kinect_id_mapping
-        self._loop_sleep = 0.5
-        self._view_recorders_placement = {} #recorder_id:position_in_the_view
+        self._view = None
+        self._connected_recorders = {}
 
-    async def handle_new_recorder_connection(self, websocket):
-        comm = RecorderComm(websocket, self, self._next_recorder_id)
-        comm_task = asyncio.create_task(comm.start_event_loop())
-        self._connected_recorders[self._next_recorder_id] = comm
-        self._connected_recorder_tasks[self._next_recorder_id] = comm_task
-        logger.info(f"Created a new recorder ID {self._next_recorder_id}")
-        self._next_recorder_id += 1
+    def set_view(self, view):
+        self._view = view
 
-    async def recorder_server_loop(self):
-        host, port = self.server_address.split(":")
-        async with websockets.serve(self.handle_new_recorder_connection, host, int(port)):
-            await asyncio.Future()
+    def add_recorder(self, recorder_comm, recorder_id):
+        assert recorder_id not in recorder_comm
+        self._connected_recorders[recorder_id] = recorder_comm
 
-    async def main_loop(self):
-        asyncio.create_task(self.recorder_server_loop())
-        while self._loop_active:
-            await asyncio.sleep(self._loop_sleep)
-
-    def start(self):
-        self._loop_active = True
-        asyncio.get_event_loop().run_until_complete(self.main_loop())
-
-    def stop(self):
-        self._loop_active = False
+    def remove_recorder(self, recorder_id):
+        del self._connected_recorders[recorder_id]
 
     ### Actions ###
-    def update_kinect_status(self, recorder_id: int, kinect_status: str, recorder_transferring: bool,
+    def _update_kinect_status(self, recorder_id: int, kinect_status: str, recorder_transferring: bool,
         status_info: str, optionals: Dict[str, Union[float, Dict[str, float]]]):
         pass
 
-
+    ### Methods ###
+    def ask_kinect_status(self):
+        asyncio.gather(comm.get_status() for comm in self._connected_recorders.values())
 
     ### Callbacks ###
     def comm_get_status_reply(self, recorder_id: int, reply_result: bool, kinect_status: str,
