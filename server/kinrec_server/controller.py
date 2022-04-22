@@ -5,7 +5,7 @@ import logging
 import os
 import time
 import websockets
-from recorder_communication import RecorderComm
+from .recorder_communication import RecorderComm
 from typing import Dict, Optional, Union, Sequence, Mapping
 
 logging.basicConfig(level=logging.INFO)

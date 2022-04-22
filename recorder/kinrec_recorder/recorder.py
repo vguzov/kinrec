@@ -17,7 +17,7 @@ from .net import NetHandler
 from videoio import VideoWriter, Uint16Writer
 from typing import Tuple, Sequence, List, Optional, IO
 from dataclasses import dataclass
-from argparse import ArgumentParser
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("recorder")
@@ -549,17 +549,3 @@ class MainController:
             else:
                 logger.warning(f"Unrecognized command '{msgt}'")
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt, "recorder fail", "Unrecognized command")})
-
-
-if __name__ == "__main__":
-    parser = ArgumentParser("Kinect recorder")
-    parser.add_argument("-rd", "--recdir", default="kinrec/recordings",
-                        help="Folder where all the recordings are stored")
-    parser.add_argument("-s", "--server", default="kinrec.cv:4400", help="Server address and port")
-
-    args = parser.parse_args()
-    logger.info("Starting network")
-    net = NetHandler(args.server)
-    logger.info("Starting main controller")
-    controller = MainController(net_handler=net, recordings_dir=args.recdir)
-    controller.main_loop()
