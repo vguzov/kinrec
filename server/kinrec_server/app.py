@@ -13,11 +13,12 @@ from copy import deepcopy
 import toml
 import os
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("application")
+logger = logging.getLogger("KRS.application")
+
 
 class KinRecApp(tk.Tk):
-    def __init__(self, number_of_kinects, server_address="kinrec.cv:4400", workdir = "./kinrec"):
+    def __init__(self, number_of_kinects: int, server_address: str = "kinrec.cv:4400", workdir: str = "./kinrec",
+            status_update_period: float = 2.0):
         super().__init__()
         self.server_address = server_address
         self._next_recorder_id = 0
@@ -26,8 +27,8 @@ class KinRecApp(tk.Tk):
         self._workdir = workdir
         self._loop_active = False
         self._kinect_id_mapping = {}
-        self._loop_sleep = 1/30.
-        self._status_update_period = 0.5
+        self._loop_sleep = 1 / 30.
+        self._status_update_period = status_update_period
 
         os.makedirs(self._workdir, exist_ok=True)
         params_path = os.path.join(self._workdir, "params.toml")
@@ -59,15 +60,16 @@ class KinRecApp(tk.Tk):
         del self._connected_recorder_tasks[recorder_id]
 
     async def handle_new_recorder_connection(self, websocket):
-        recorder = RecorderComm(websocket, self, self._next_recorder_id,
+        recorder = RecorderComm(websocket, self.controller, self._next_recorder_id,
                                 connection_close_callback=self.handle_closed_recorder)
-        recorder_task = asyncio.create_task(recorder.start_event_loop())
+        # recorder_task = asyncio.create_task()
         recorder_id = self._next_recorder_id
         self._connected_recorders[recorder_id] = recorder
-        self._connected_recorder_tasks[recorder_id] = recorder_task
+        self._connected_recorder_tasks[recorder_id] = None
         logger.info(f"Created a new recorder ID {recorder_id}")
         self.controller.add_recorder(recorder, recorder_id)
         self._next_recorder_id += 1
+        await recorder.start_event_loop()
 
     async def recorder_server_loop(self, stop_event: asyncio.Event):
         host, port = self.server_address.split(":")
@@ -76,7 +78,7 @@ class KinRecApp(tk.Tk):
 
     async def status_update_loop(self):
         while self._loop_active:
-            self.controller.ask_kinect_status()
+            await self.controller.ask_kinect_status()
             await asyncio.sleep(self._status_update_period)
 
     async def main_loop(self):

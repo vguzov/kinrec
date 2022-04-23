@@ -7,8 +7,7 @@ from tkinter import messagebox, filedialog, ttk
 from .internal import RecorderState
 from .tk_wrappers import FocusButton, FocusCheckButton, FocusLabelFrame
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("view")
+logger = logging.getLogger("KRS.view")
 
 
 class KinRecView(ttk.Frame):

@@ -11,9 +11,9 @@ from PIL import Image
 from collections import namedtuple
 from functools import partial
 from typing import Optional, Union, List, Sequence
+from .internal import RecorderState
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("recorder_comm")
+logger = logging.getLogger("KRS.recorder_comm")
 
 
 class RecorderComm:
@@ -46,7 +46,7 @@ class RecorderComm:
     ControllerCallbacks = namedtuple("ControllerCallbacks", " ".join(callback_names))
     unmatched_answers = ["collect_file_start", "collect_file_end"]
 
-    def __init__(self, websocket, controller, recorder_id, connection_close_callback):
+    def __init__(self, websocket, controller, recorder_id, connection_close_callback, full_status_update_step=100):
         self._recorder_id = recorder_id
         self._websocket = websocket
         self._kinect_id = None
@@ -54,7 +54,7 @@ class RecorderComm:
         self._kinect_calibration = None
         self._recordings_list = None
         self._sent_cmds = []
-        self._kinect_status = "disconnected"
+        self._kinect_status = "kin. not ready"
         self._recorder_transferring = False
         self._recording_paths = {}
         self._current_file_descriptor = None
@@ -65,6 +65,9 @@ class RecorderComm:
         # self.controller_callbacks: RecorderComm.ControllerCallbacks = None
         self._register_callbacks(controller)
         self._connection_close_callback = connection_close_callback
+        self._last_state = RecorderState()
+        self._till_full_status_update = 0
+        self._full_status_update_step = full_status_update_step
 
     def _register_callbacks(self, controller):
         callbacks_list = []
@@ -77,9 +80,10 @@ class RecorderComm:
     def _match_answer(self, cmd_report):
         cmdt = cmd_report["cmd"]
         if cmdt not in self.unmatched_answers:
-            for sent_ind, (sent_cmdt, sent_waiting_event) in enumerate(self._sent_cmds):
+            for sent_ind, sent_cmdt_event in enumerate(self._sent_cmds):
+                sent_cmdt, sent_waiting_event = sent_cmdt_event
                 if cmdt == sent_cmdt:
-                    self._sent_cmds.remove(sent_cmdt)
+                    self._sent_cmds.remove(sent_cmdt_event)
                     return sent_waiting_event
             raise RecorderComm.UnmatchedAnswerException(cmd_report)
         else:
@@ -104,7 +108,9 @@ class RecorderComm:
             msg = await self._websocket.recv()
         except websockets.ConnectionClosed:
             await self.close()
-        if isinstance(msg, dict):
+            return
+        if isinstance(msg, str):
+            msg = json.loads(msg)
             if 'cmd_report' in msg:
                 cmd_report = msg['cmd_report']
                 try:
@@ -126,20 +132,9 @@ class RecorderComm:
                         return
 
                     if cmdt == "get_status":
-                        self._kinect_status = msg["kinect_status"]
-                        self._recorder_transferring = msg["transferring"]
-                        self.controller_callbacks.get_status_reply(True, self._kinect_status,
-                                                                   self._recorder_transferring, msg["info"],
-                                                                   msg["optionals"])
+                        self._process_status_msg(msg)
                     elif cmdt == "get_kinect_calibration":
-                        if cmd_result == "OK":
-                            self._kinect_id = msg["kinect_id"]
-                            self._kinect_calibration = msg["kinect_calibration"]
-                            logger.info(f"Got info from Kinect: id {self._kinect_id}")
-                            self.controller_callbacks.get_kinect_calibration_reply(True, self._kinect_id,
-                                                                                   self._kinect_calibration)
-                        else:
-                            self.controller_callbacks.get_kinect_calibration_reply(False, None, None, info=cmd_info)
+                        self._process_calibration_msg(msg)
                     elif cmdt == "set_kinect_params":
                         self.controller_callbacks.set_kinect_params_reply(True)
                     elif cmdt == "start_preview":
@@ -254,14 +249,13 @@ class RecorderComm:
     async def get_kinect_calibration(self):
         await self._send({"type": "get_kinect_calibration"})
 
-    async def get_status(self, disk_space=False, battery=False, recording_fps=False):
-        optionals = []
-        if disk_space:
-            optionals.append("disk_space")
-        if battery:
-            optionals.append("battery")
-        if recording_fps:
-            optionals.append("recording_fps")
+    async def get_status(self, full_update = False):
+        if self._till_full_status_update <= 0 or full_update:
+            optionals = ["disk_space", "battery", "recording_fps"]
+            self._till_full_status_update = self._full_status_update_step
+        else:
+            optionals = []
+            self._till_full_status_update -= 1
         await self._send({"type": "get_status", "optionals": optionals})
 
     async def start_preview(self):
@@ -313,7 +307,36 @@ class RecorderComm:
     async def close(self):
         self.stop_event_loop()
         await self._websocket.close()
+        self.controller_callbacks.get_status_reply(False, self._last_state)
         self._connection_close_callback(self._recorder_id)
 
     def _init_kinect_info(self):
         self._send({"type": "get_kinect_calibration"})
+
+    def _process_status_msg(self, msg):
+        self._kinect_status = msg["kinect_status"]
+        self._recorder_transferring = msg["transferring"]
+        self._last_state.status = msg["kinect_status"]
+        if "battery" in msg["optionals"]:
+            if msg["optionals"]["battery"] is None:
+                self._last_state.bat_power = 0
+            else:
+                self._last_state.bat_power = int(msg["optionals"]["battery"]["percent"])
+        if "disk_space" in msg["optionals"]:
+            self._last_state.free_space = int(msg["optionals"]["disk_space"]["free"] / 2 ** 30)
+        self.controller_callbacks.get_status_reply(True, self._last_state)
+
+    def _process_calibration_msg(self, msg):
+        cmd_report = msg['cmd_report']
+        cmd_result = cmd_report["result"]
+        cmd_info = cmd_report["info"]
+        if cmd_result == "OK":
+            self._kinect_id = msg["kinect_id"]
+            self._last_state.kinect_id = msg["kinect_id"]
+            self._kinect_calibration = msg["kinect_calibration"]
+            logger.info(f"Got info from Kinect: id {self._kinect_id}")
+            self.controller_callbacks.get_kinect_calibration_reply(True, self._kinect_id,
+                                                                   self._kinect_calibration)
+        else:
+            self.controller_callbacks.get_kinect_calibration_reply(False, None, None, info=cmd_info)
+

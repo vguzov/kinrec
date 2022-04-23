@@ -18,9 +18,7 @@ from videoio import VideoWriter, Uint16Writer
 from typing import Tuple, Sequence, List, Optional, IO
 from dataclasses import dataclass
 
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("recorder")
+logger = logging.getLogger("KR.recorder")
 
 status_possible_results = ["OK", "Kinect fail", "Recorder fail"]
 status_possible_results_lower = [x.lower() for x in status_possible_results]
@@ -111,7 +109,8 @@ class Kinect:
     def connected(self) -> bool:
         try:
             self.device.get_serial_number()
-        except:
+        except Exception as e:
+            logger.warning(f"KinZ exception: {e}")
             return False
         else:
             return True
@@ -170,9 +169,9 @@ class Kinect:
         return self._id
 
 
-
 class RecorderThread(Thread):
-    def __init__(self, kinect, recording_dir, expected_timelen=None, fps_window_size=20, final_callback=None, start_delay = 0):
+    def __init__(self, kinect, recording_dir, expected_timelen=None, fps_window_size=20, final_callback=None,
+            start_delay=0):
         super().__init__()
         self.kinect = kinect
         self.recording_dir = recording_dir
@@ -242,6 +241,7 @@ class MainController:
         self.active = False
         self.kinect = Kinect()
         self.recordings_dir = recordings_dir
+        os.makedirs(recordings_dir, exist_ok=True)
         self.recording_expected_duration = None
         self.recording_metadata = None
         self.recorder: Optional[RecorderThread] = None
@@ -276,7 +276,7 @@ class MainController:
         return f"{recording_id}_{recording_name}"
 
     def start_recording(self, recording_id, recording_name, recording_duration, server_time, participating_kinects,
-            start_delay = 0):
+            start_delay=0):
         curr_recording_dir = os.path.join(self.recordings_dir, self.get_recording_dirname(recording_id, recording_name))
         if os.path.exists(curr_recording_dir):
             raise MainController.RecordingExistsException()
@@ -389,7 +389,11 @@ class MainController:
             self.current_sendfile = open(current_file_info.path, "rb")
 
     def main_loop(self):
+        self.active = True
         while self.active:
+            if not self.net.active:
+                self.active = False
+                break
             msg = self.net.get(wait=False)
             self.handle_recording()
             self.handle_sendfile()
@@ -509,34 +513,37 @@ class MainController:
                 info = ""
                 recording_fps = 0
                 optionals = {}
+                # Kinect statuses (new: "ready", "preview", "recording", "kin. not ready",
+                #                  old: "recording", "active", "idle", "disconnected")
                 if self.kinect.active:
                     if self.recorder is not None:
                         kin_state = "recording"
                         recording_fps = self.recorder.sliding_window_fps
                         info = f"Recording at {recording_fps:.2f} FPS"
                     else:
-                        kin_state = "active"
+                        kin_state = "preview"
                 else:
                     if self.kinect.connected:
-                        kin_state = "idle"
+                        kin_state = "ready"
                     else:
-                        kin_state = "disconnected"
-                for opt_name in msg["optionals"]:
-                    if opt_name == "recording_fps":
-                        optionals["recording_fps"] = recording_fps
-                    elif opt_name == "disk_space":
-                        total, used, free = shutil.disk_usage(self.recordings_dir)
-                        optionals["disk_space"] = {"total": total, "used": used, "free": free}
-                    elif opt_name == "battery":
-                        battery = psutil.sensors_battery()
-                        if battery is None:
-                            optionals["battery"] = None
-                        else:
-                            plugged = battery.power_plugged
-                            percent = battery.percent
-                            optionals["battery"] = {"percent": percent, "plugged": plugged}
+                        kin_state = "kin. not ready"
+                if "optionals" in msg:
+                    for opt_name in msg["optionals"]:
+                        if opt_name == "recording_fps":
+                            optionals["recording_fps"] = recording_fps
+                        elif opt_name == "disk_space":
+                            total, used, free = shutil.disk_usage(self.recordings_dir)
+                            optionals["disk_space"] = {"total": total, "used": used, "free": free}
+                        elif opt_name == "battery":
+                            battery = psutil.sensors_battery()
+                            if battery is None:
+                                optionals["battery"] = None
+                            else:
+                                plugged = battery.power_plugged
+                                percent = battery.percent
+                                optionals["battery"] = {"percent": percent, "plugged": plugged}
                 self.net.send({"type": "status", "cmd_report": statusd(msgt),
-                               "kinect_status": kin_state, info: info, "transferring": len(self.sendfile_queue) > 0,
+                               "kinect_status": kin_state, "info": info, "transferring": len(self.sendfile_queue) > 0,
                                "optionals": optionals})
             elif msgt == "shutdown":
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
@@ -549,3 +556,4 @@ class MainController:
             else:
                 logger.warning(f"Unrecognized command '{msgt}'")
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt, "recorder fail", "Unrecognized command")})
+        logger.info("Main controller loop completed")

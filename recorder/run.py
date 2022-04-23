@@ -3,8 +3,21 @@ import logging
 from kinrec_recorder.recorder import MainController
 from kinrec_recorder.net import NetHandler
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("runner")
+logger = logging.getLogger("KR")
+logger.setLevel(logging.INFO)
+stream_handler = logging.StreamHandler()
+
+stream_handler.setLevel(logging.INFO)
+stream_handler.setFormatter(logging.Formatter('%(asctime)s:%(name)s:%(levelname)s::: %(message)s',
+                                              datefmt='%H:%M:%S'))
+logger.addHandler(stream_handler)
+
+ws_logger = logging.getLogger("websockets")
+ws_logger.setLevel(logging.INFO)
+ws_logger.addHandler(stream_handler)
+
+# import pydevd_pycharm
+# pydevd_pycharm.settrace('192.168.1.41', port=4567, stdoutToServer=True, stderrToServer=True)
 
 if __name__ == "__main__":
     parser = ArgumentParser("Kinect recorder")

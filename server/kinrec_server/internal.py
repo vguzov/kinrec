@@ -1,7 +1,9 @@
 from typing import NamedTuple
+from dataclasses import dataclass
 
 
-class RecorderState(NamedTuple):
+@dataclass
+class RecorderState:
     kinect_id: int = None
     status: str = "offline"  # "offline", "ready", "preview", "recording", "kin. not ready"
     free_space: int = 0  # in GB
