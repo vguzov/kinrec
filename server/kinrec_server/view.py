@@ -1,10 +1,11 @@
 from functools import partial
 import logging
+from datetime import datetime, timedelta
 
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 
-from .internal import RecorderState
+from .internal import RecorderState, RecordsEntry
 from .tk_wrappers import FocusButton, FocusCheckButton, FocusLabelFrame
 
 logger = logging.getLogger("KRS.view")
@@ -48,13 +49,13 @@ class KinRecView(ttk.Frame):
 
         # Add menus and frames
         self._add_top_bar_menu()
-        self._add_preview_canvas()
+        self._add_preview_frame()
         self._add_records_browser_frame()
         self._add_params_frame()
         self._add_recording_frame()
         self._add_state_frame()
 
-        # # Pre-defined constamts
+        # # Pre-defined constants
         # self.RET_CODE_EXIT, self.RET_CODE_OK, self.RET_CODE_ERROR = -1, 0, 1
         # # State messages for state table
         # self._state_message_server = "Status: {}"
@@ -85,6 +86,10 @@ class KinRecView(ttk.Frame):
             "recording": {
 
             },
+            "recordings_list": {
+                "is_on": tk.BooleanVar(value=False),
+                "checkboxes": dict()
+            },
             "preview": {
                 "is_on": tk.BooleanVar(value=False),
                 "recorder_index": tk.IntVar(value=-1)
@@ -108,7 +113,7 @@ class KinRecView(ttk.Frame):
 
         self.parent.config(menu=self.menubar)
 
-    def _add_preview_canvas(self):
+    def _add_preview_frame(self):
         self.preview_frame = FocusLabelFrame(self, text="Preview")
         self.preview_frame.rowconfigure(0, weight=1)
         self.preview_frame.columnconfigure(0, weight=1)
@@ -121,7 +126,59 @@ class KinRecView(ttk.Frame):
         self.preview_frame.grid_remove()
 
     def _add_records_browser_frame(self):
-        pass
+        self.browser_frame = FocusLabelFrame(self, text="Browse recordings")
+        self.browser_frame.rowconfigure(0, weight=1)
+        self.browser_frame.columnconfigure(0, weight=1)
+
+        # Subframe with records list and scrollbar
+        # subframe creation
+        browser_records_subframe = FocusLabelFrame(self.browser_frame, text="List")
+        browser_records_subframe.grid_rowconfigure(0, weight=1)
+        browser_records_subframe.grid_columnconfigure(0, weight=1)
+        browser_records_subframe.grid_propagate(False)
+        browser_records_subframe.grid(row=0, column=0, padx=5, pady=5)
+        # canvas that holds records subsubframe and scrollbar
+        browser_records_canvas = tk.Canvas(browser_records_subframe)
+        browser_records_canvas.grid(row=0, column=0, sticky="news")
+        # subsubframe
+        self.browser_records_subsubframe = FocusLabelFrame(browser_records_canvas, bg="white")
+        browser_records_canvas.create_window((0, 0), window=self.browser_records_subsubframe, anchor='nw')
+        # browser_records_subsubframe.grid(row=0, column=0)
+        # header for records list in subsubframe
+        self.records_list = []
+        header = [
+            tk.Label(self.browser_records_subsubframe, text="Collect?"),
+            tk.Label(self.browser_records_subsubframe, text="Date"),
+            tk.Label(self.browser_records_subsubframe, text="Name"),
+            tk.Label(self.browser_records_subsubframe, text="Length"),
+            tk.Label(self.browser_records_subsubframe, text="Params"),
+            tk.Label(self.browser_records_subsubframe, text="Size"),
+            tk.Label(self.browser_records_subsubframe, text="Status")
+        ]
+        for index, label in enumerate(header):
+            label.grid(row=0, column=index, padx=2, sticky='news')
+        self.records_list.append(header)
+        # scrollbar
+        records_scrollbar = tk.Scrollbar(
+            browser_records_subframe, orient="vertical", command=browser_records_canvas.yview
+        )
+        records_scrollbar.grid(row=0, column=1, sticky='ns')
+        browser_records_canvas.configure(yscrollcommand=records_scrollbar.set)
+        # resize canvas to fit everything
+        self.browser_records_subsubframe.update_idletasks()
+        _width = 1.3 * sum([header[j].winfo_width() for j in range(len(header))])
+        _height = 10 * header[0].winfo_height()
+        browser_records_subframe.config(width=_width + records_scrollbar.winfo_width(), height=_height)
+        browser_records_canvas.config(scrollregion=browser_records_canvas.bbox("all"))
+
+        # Subframe with download button and progressbar
+        browser_progress_subframe = FocusLabelFrame(self.browser_frame, text="Collection")
+        browser_progress_subframe.grid(row=1, column=0)
+        FocusButton(browser_progress_subframe, text='Collect!', width=7,
+                    command=self._callback_records_collect).grid(row=0, column=0, padx=5, pady=5)
+
+        self.browser_frame.grid(row=1, rowspan=3, column=2, sticky="ne", padx=5, pady=5)
+        self.browser_frame.grid_remove()
 
     def _add_params_frame(self):
         self.params_frame = FocusLabelFrame(self, text="Recording parameters")
@@ -154,7 +211,13 @@ class KinRecView(ttk.Frame):
                          variable=self.state['kinect']['sync']).grid(row=2, column=2, padx=5, sticky='e')
 
     def _add_recording_frame(self):
-        pass
+        self.recording_frame = FocusLabelFrame(self, text="Recording")
+        self.recording_frame.grid(row=2, column=1, padx=5, pady=5)
+        root = self.recording_frame
+
+        FocusButton(
+            root, text='Browse recordings', width=10, command=self._callback_browse_recordings
+        ).grid(row=0, column=0, padx=5, pady=5)
 
     def _add_state_frame(self):
         self.state_frame = FocusLabelFrame(self, text="State")
@@ -186,6 +249,25 @@ class KinRecView(ttk.Frame):
 
             self.update_recorder_state(recorder_index, self._recorders[recorder_index]["state"])
 
+    def add_records_browser_row(self, entry: RecordsEntry):
+        # create variable for checkbox
+        self.state["recordings_list"]["checkboxes"][entry.id] = tk.BooleanVar(value=False)
+
+        date_str = datetime.fromtimestamp(entry.date).strftime("%d.%m.%Y, %H:%M")
+        time_str = timedelta(seconds=entry.length)
+        params_str = "\n".join([f"{k}: {v}" for k, v in entry.params.items()])
+        row = [
+            FocusCheckButton(self.browser_records_subsubframe, text="",
+                             command=partial(self._callback_select_recording, entry.id),
+                             variable=self.state["recordings_list"]["checkboxes"][entry.id]),
+            tk.Label(self.browser_records_subsubframe, text=f"{date_str}"),
+            tk.Label(self.browser_records_subsubframe, text="Name"),
+            tk.Label(self.browser_records_subsubframe, text=f"{time_str}"),
+            tk.Label(self.browser_records_subsubframe, text=f"{params_str}"),
+            tk.Label(self.browser_records_subsubframe, text=f"{entry.size:06.1f}"),
+            tk.Label(self.browser_records_subsubframe, text=f"{entry.status}")
+        ]
+        return row
     # ==================================================================================================================
 
     # =============================================== External Interfaces ==============================================
@@ -225,8 +307,13 @@ class KinRecView(ttk.Frame):
     def update_progressbar(self):
         pass
 
-    def update_server_state(self):
-        pass
+    def update_server_state(self, status: str):
+        if status == "offline":
+            pass
+        elif status == "online":
+            pass
+        else:
+            raise ValueError(f"Unknown server status {status}")
 
     def update_recorder_state(self, recorder_index: int, state: RecorderState):
         # statuses: "offline", "ready", "preview", "recording", "kin. not ready"
@@ -260,6 +347,14 @@ class KinRecView(ttk.Frame):
         self.update_recorder_state(1, RecorderState(2, "ready", 11, 22))
         pass
 
+    def _callback_browse_recordings(self):
+        if self.state["recordings_list"]["is_on"].get():
+            self.state["recordings_list"]["is_on"].set(False)
+            self.browser_frame.grid_remove()
+        else:
+            self.state["recordings_list"]["is_on"].set(True)
+            self.browser_frame.grid()
+
     def _callback_rgb_res(self):
         pass
 
@@ -282,6 +377,11 @@ class KinRecView(ttk.Frame):
             # TODO self.controller.start_preview(recorder_index)
             self.start_preview(recorder_index)
 
+    def _callback_select_recording(self, recording_id: int):
+        pass
+
+    def _callback_records_collect(self):
+        pass
 
     def _callback_about(self):
         self.menubar.focus_set()
