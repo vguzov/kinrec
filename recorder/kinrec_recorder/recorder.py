@@ -15,7 +15,7 @@ from skimage.transform import rescale
 from threading import Thread
 from .net import NetHandler
 from videoio import VideoWriter, Uint16Writer
-from typing import Tuple, Sequence, List, Optional, IO
+from typing import Tuple, Sequence, List, Optional, IO, Union
 from dataclasses import dataclass
 
 logger = logging.getLogger("KR.recorder")
@@ -75,14 +75,14 @@ class Kinect:
     def _start(self, resolution=1440, wfov=False, binned=False, framerate=30, sync_mode="none"):
         if self.active:
             raise Kinect.DoubleActivationException()
-        kin = kinz.Kinect(resolution=resolution, wfov=wfov, binned=binned, framerate=framerate, sync_mode=sync_mode,
+        kin = kinz.Kinect(resolution=resolution, wfov=wfov, binned=binned, framerate=framerate,  # sync_mode=sync_mode,
                           imu_sensors=False)
         self.device = kin
         self.active = True
         logger.info("Kinect initialized, getting frame to test")
         try:
             self._get_next_frame(self.init_frame_timeout)
-        except Kinect.FrameGetFailException():
+        except Kinect.FrameGetFailException:
             self.device = None
             self.active = False
             self.calibration = None
@@ -140,8 +140,9 @@ class Kinect:
         if not self.active:
             raise Kinect.NotActivatedException()
         if self.calibration is None:
-            self.calibration = self.device.get_full_calibration()
-            self.depth2d3dmap = self.device.get_depth2d3dmap()
+            # TODO: implement get_full_calibration, get_depth2d3dmap
+            # self.calibration = self.device.get_full_calibration()
+            # self.depth2d3dmap = self.device.get_depth2d3dmap()
             self._id = self.device.get_serial_number()
 
     def stop(self):
@@ -155,6 +156,8 @@ class Kinect:
 
     @property
     def calibration_dict(self):
+        if self.calibration is None:
+            return None
         # TODO: finalize
         return {"color": {"cx": self.calibration.color.cx, "cy": self.calibration.color.cy},
                 "depth": {},
@@ -253,20 +256,25 @@ class MainController:
     def start_kinect(self):
         self.kinect.start()
 
-    def get_preview_frame(self, scale):
-        color, _, color_ts, _ = self.kinect.get_next_frame()
-        if isinstance(scale, int):
-            if scale == 1:
-                return color, color_ts
-            else:
-                return color[::scale, ::scale], color_ts
+    def get_preview_frame(self, color_scale: Union[float, int], depth_scale: Optional[int]):
+        def int_scale(img, scale: int):
+            if scale != 1:
+                img = img[::scale, ::scale]
+            return img
+        color, depth, color_ts, depth_ts = self.kinect.get_next_frame()
+        if isinstance(color_scale, int):
+            color = int_scale(color, color_scale)
         else:
             if color.dtype == np.uint8:
-                color = (rescale(color.astype(np.float32) / 255., 1. / scale, multichannel=True) * 255.).astype(
+                color = (rescale(color.astype(np.float32) / 255., 1. / color_scale, multichannel=True) * 255.).astype(
                     np.uint8)
             else:
-                color = rescale(color, 1. / scale, multichannel=True)
-            return color, color_ts
+                color = rescale(color, 1. / color_scale, multichannel=True)
+        if depth_scale is not None:
+            depth = int_scale(depth, depth_scale)
+            return color, depth, color_ts, depth_ts
+        else:
+            return color, None, color_ts, None
 
     def stop_kinect(self):
         self.kinect.stop()
@@ -388,6 +396,13 @@ class MainController:
                            "relative_file_path": current_file_info.relpath, "file_size": size})
             self.current_sendfile = open(current_file_info.path, "rb")
 
+    def image_encode(self, image: np.ndarray, format: str = "jpeg"):
+        fp = io.BytesIO()
+        Image.fromarray(image).save(fp, format)
+        img_encoded = fp.getvalue()
+        b64encoded = base64.b64encode(img_encoded).decode("utf-8")
+        return b64encoded
+
     def main_loop(self):
         self.active = True
         while self.active:
@@ -415,9 +430,10 @@ class MainController:
                 else:
                     self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
             elif msgt == "get_preview_frame":
-                scale = msg["scale"]
+                color_scale = msg["color_scale"]
+                depth_scale = msg["depth_scale"]
                 try:
-                    color, color_ts = self.get_preview_frame(scale)
+                    color, depth, color_ts, depth_ts = self.get_preview_frame(color_scale, depth_scale)
                 except Kinect.NotActivatedException:
                     self.net.send({"type": "preview_frame", "cmd_report":
                         statusd(msgt, "kinect fail", f"Kinect is not activated")})
@@ -426,12 +442,12 @@ class MainController:
                         statusd(msgt, "kinect fail", f"Failed to acquire a readable frame within "
                                                      f"{self.kinect.regular_frame_timeout} seconds")})
                 else:
-                    fp = io.BytesIO()
-                    Image.fromarray(color).save(fp, "jpeg")
-                    img_encoded = fp.getvalue()
-                    b64encoded = base64.b64encode(img_encoded).decode("utf-8")
+                    color_data = {"timestamp": color_ts, "data": self.image_encode(color, "jpeg")}
+                    depth_data = None
+                    if depth_scale is not None:
+                        depth_data = {"timestamp": depth_ts, "data": self.image_encode(depth, "png")}
                     self.net.send({"type": "preview_frame", "cmd_report":
-                        statusd(msgt), "timestamp": color_ts, "data": b64encoded})
+                        statusd(msgt), "color":color_data, "depth": depth_data})
             elif msgt == "stop_preview":
                 try:
                     self.stop_kinect()
@@ -504,7 +520,7 @@ class MainController:
                                                                                        "Failed to activate Kinect")})
                 else:
                     self.net.send({"type": "kinect_calibration", "cmd_report": statusd(msgt),
-                                   "kinect_calibration": calibration_dict})
+                                   "kinect_calibration": calibration_dict, "kinect_id": self.kinect.id})
             elif msgt == "set_kinect_params":
                 self.kinect.update_params(msg["rgb_res"], msg["depth_wfov"], msg["depth_binned"],
                                           msg["fps"], msg["sync_mode"])

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 @dataclass
 class RecorderState:
+    kinect_alias: int = None
     kinect_id: int = None
     status: str = "offline"  # "offline", "ready", "preview", "recording", "kin. not ready"
     free_space: int = 0  # in GB
@@ -18,3 +19,11 @@ class RecordsEntry(NamedTuple):
     params: dict = None  # recording_params
     size: float = 0.0  # in MB
     status: str = ""  # Consistent (n/n) or Inconsistent (m/n, missing: k_i)
+    participating_kinects = tuple()
+
+class KinectParams(NamedTuple):
+    rgb_res: int = 1440
+    depth_wfov: bool = False
+    depth_binned: bool = False
+    fps: int = 30
+    sync: bool = False

@@ -12,6 +12,7 @@ import websockets
 from copy import deepcopy
 import toml
 import os
+from collections import defaultdict
 
 logger = logging.getLogger("KRS.application")
 
@@ -21,7 +22,6 @@ class KinRecApp(tk.Tk):
             status_update_period: float = 2.0):
         super().__init__()
         self.server_address = server_address
-        self._next_recorder_id = 0
         self._connected_recorders = {}
         self._connected_recorder_tasks = {}
         self._workdir = workdir
@@ -29,6 +29,8 @@ class KinRecApp(tk.Tk):
         self._kinect_id_mapping = {}
         self._loop_sleep = 1 / 30.
         self._status_update_period = status_update_period
+        self.protocol("WM_DELETE_WINDOW", self._on_quit)
+        self.minsize(300, 400)
 
         os.makedirs(self._workdir, exist_ok=True)
         params_path = os.path.join(self._workdir, "params.toml")
@@ -38,9 +40,13 @@ class KinRecApp(tk.Tk):
             parameters_dict = deepcopy(app_default_parameters)
             toml.dump(parameters_dict, open(params_path, "w"))
 
+        kinect_alias_mapping = defaultdict(lambda: None)
+        if "kinect_alias_mapping" in parameters_dict:
+            kinect_alias_mapping.update(parameters_dict["kinect_alias_mapping"])
+
         self.title("Kinect Recorder server interface")
 
-        self.controller = KinRecController()
+        self.controller = KinRecController(kinect_alias_mapping=kinect_alias_mapping)
 
         self.view = KinRecView(parent=self, number_of_kinects=number_of_kinects)
         self.view.set_controller(self.controller)
@@ -59,6 +65,13 @@ class KinRecApp(tk.Tk):
         del self._connected_recorders[recorder_id]
         del self._connected_recorder_tasks[recorder_id]
 
+    @property
+    def _next_recorder_id(self):
+        ind = 0
+        while ind in self._connected_recorders:
+            ind += 1
+        return ind
+
     async def handle_new_recorder_connection(self, websocket):
         recorder = RecorderComm(websocket, self.controller, self._next_recorder_id,
                                 connection_close_callback=self.handle_closed_recorder)
@@ -67,9 +80,8 @@ class KinRecApp(tk.Tk):
         self._connected_recorders[recorder_id] = recorder
         self._connected_recorder_tasks[recorder_id] = None
         logger.info(f"Created a new recorder ID {recorder_id}")
-        self.controller.add_recorder(recorder, recorder_id)
-        self._next_recorder_id += 1
-        await recorder.start_event_loop()
+        await self.controller.add_recorder(recorder, recorder_id)
+        await recorder.event_loop()
 
     async def recorder_server_loop(self, stop_event: asyncio.Event):
         host, port = self.server_address.split(":")
@@ -86,6 +98,15 @@ class KinRecApp(tk.Tk):
         asyncio.create_task(self.recorder_server_loop(server_stop_event))
         asyncio.create_task(self.status_update_loop())
         while self._loop_active:
-            self.update()
-            await asyncio.sleep(self._loop_sleep)
+            try:
+                self.update()
+            except tk.TclError as e:
+                logger.warning(f"TkInter failed to update with the following exception: '{e}'")
+                self._loop_active = False
+            else:
+                await asyncio.sleep(self._loop_sleep)
         server_stop_event.set()
+
+    def _on_quit(self):
+        self._loop_active = False
+

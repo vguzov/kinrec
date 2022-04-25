@@ -6,19 +6,35 @@ import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 from PIL import Image, ImageTk
 
-from .internal import RecorderState, RecordsEntry
+from .internal import RecorderState, RecordsEntry, KinectParams
 from .tk_wrappers import FocusButton, FocusCheckButton, FocusLabelFrame
 
 logger = logging.getLogger("KRS.view")
 
 
 class KinRecView(ttk.Frame):
+    _rgb_res_params = {
+        "1280x720": 720,
+        "1920x1080": 1080,
+        "2560x1440": 1440,
+        "2048x1536": 1536,
+        "3840x2160": 2160,
+        "4096x3072": 3072
+    }
+    _depth_modes_params = {
+        # WFOV, binned
+        "WFOV unbinned (1024x1024)": (True, False),
+        "WFOV binned    (512x512)": (True, True),
+        "NFOV unbinned  (640x576)": (False, False),
+        "NFOV binned    (320x288)": (False, True)
+    }
     def __init__(self, parent, number_of_kinects=4):
         super().__init__(parent)
+        self._preview_frame_size = (800, 400)
         self.parent = parent
         self.pack(fill="both", expand=True)
         self._controller = None
-        self.number_of_kinects = 4
+        self.number_of_kinects = number_of_kinects
 
         # Constant parameters
         self._rgb_resolutions = {
@@ -27,7 +43,7 @@ class KinRecView(ttk.Frame):
         }
         self._depth_modes = {
             "WFOV unbinned (1024x1024)": (1024, 1024), "WFOV binned    (512x512)": (512, 512),
-            "NFOV unbinned  (640x576)": (640, 576),   "NFOV binned    (320x288)": (320, 288)
+            "NFOV unbinned  (640x576)": (640, 576), "NFOV binned    (320x288)": (320, 288)
         }
         self._fps = [5, 10, 15, 30]
 
@@ -119,7 +135,8 @@ class KinRecView(ttk.Frame):
         self.preview_frame.rowconfigure(0, weight=1)
         self.preview_frame.columnconfigure(0, weight=1)
 
-        self.preview_canvas = tk.Canvas(self.preview_frame, highlightthickness=0, cursor="hand1", width=800, height=400)
+        self.preview_canvas = tk.Canvas(self.preview_frame, highlightthickness=0, cursor="hand1",
+                                        width=self._preview_frame_size[0], height=self._preview_frame_size[1])
         self.preview_image = None
         self.preview_canvas.grid(row=0, column=0, sticky='nw', padx=5, pady=5)
 
@@ -195,7 +212,7 @@ class KinRecView(ttk.Frame):
                              *list(self._rgb_resolutions), command=self._callback_rgb_res)
         menu.config(width=12)
         menu.grid(row=0, column=2, padx=5, sticky='e')
-        FocusButton(root, text='Apply', width=5, style="Apply.TButton",
+        self._apply_params_button = FocusButton(root, text='Apply', width=5, style="Apply.TButton",
                     command=self._callback_apply_params).grid(row=0, rowspan=3, column=4, padx=5, ipady=20)
         # Row 1
         tk.Label(root, text="Depth mode").grid(row=1, column=0, columnspan=1, padx=5, pady=1, sticky='w')
@@ -243,8 +260,11 @@ class KinRecView(ttk.Frame):
         for recorder_index in range(self.number_of_kinects):
             # TODO default state tk.DISABLED
             # TODO add sorting based on kinect_id
-            self._recorders[recorder_index]["button"] = FocusButton(root, text="", command=partial(self._callback_preview, recorder_index))
-            self._recorders[recorder_index]["button"].grid(row=3 + recorder_index, column=1, padx=5, pady=1, sticky='ew')
+            self._recorders[recorder_index]["button"] = FocusButton(root, text="",
+                                                                    command=partial(self._callback_preview,
+                                                                                    recorder_index))
+            self._recorders[recorder_index]["button"].grid(row=3 + recorder_index, column=1, padx=5, pady=1,
+                                                           sticky='ew')
 
             self._recorders[recorder_index]["label"] = tk.Label(root, justify=tk.LEFT, text="")
             self._recorders[recorder_index]["label"].grid(row=3 + recorder_index, column=2, padx=10, pady=1, sticky='w')
@@ -270,9 +290,14 @@ class KinRecView(ttk.Frame):
             tk.Label(self.browser_records_subsubframe, text=f"{entry.status}")
         ]
         return row
+
     # ==================================================================================================================
 
     # =============================================== External Interfaces ==============================================
+    @property
+    def preview_frame_size(self):
+        return self._preview_frame_size
+
     def set_controller(self, controller):
         self._controller = controller
 
@@ -285,7 +310,6 @@ class KinRecView(ttk.Frame):
             self.state["preview"]["recorder_index"].set(recorder_index)
             self.preview_frame.grid()
             logger.info(f"launched preview for {recorder_index}")
-
         self._update_preview_buttons_state()
 
     def stop_preview(self, recorder_index):
@@ -308,24 +332,25 @@ class KinRecView(ttk.Frame):
         self._update_preview_buttons_state()
 
     def set_preview_frame(self, frame):
-        image_tk = ImageTk.PhotoImage(image=Image.fromarray(frame))
+        self.image_tk = ImageTk.PhotoImage(image=Image.fromarray(frame))
         if self.preview_image is None:
             self.preview_image = self.preview_canvas.create_image(
-                10, 10, anchor="nw", image=image_tk, tag="preview_iamge"
+                0, 0, anchor="nw", image=self.image_tk, tag="preview_image"
             )
         else:
-            self.preview_canvas.itemconfig(self.preview_image, image=image_tk)
+            self.preview_canvas.itemconfig(self.preview_image, image=self.image_tk)
 
     def update_progressbar(self):
         pass
 
     def update_server_state(self, status: str):
         if status == "offline":
-            pass
+            self._state_server = status
         elif status == "online":
-            pass
+            self._state_server = status
         else:
             raise ValueError(f"Unknown server status {status}")
+        self._state_server_label["text"] = self._state_template_server.format(self._state_server)
 
     def update_recorder_state(self, recorder_index: int, state: RecorderState):
         # statuses: "offline", "ready", "preview", "recording", "kin. not ready"
@@ -333,16 +358,16 @@ class KinRecView(ttk.Frame):
 
         if state.status in ["offline", "kin. not ready"]:
             button_state = tk.DISABLED
-            text = f"Kinect id {state.kinect_id}\n(launch preview)"
+            text = f"Kinect id {state.kinect_alias}\n(launch preview)"
         elif state.status == "preview":
             button_state = tk.NORMAL
-            text = f"Kinect id {state.kinect_id}\n(stop preview)"
+            text = f"Kinect id {state.kinect_alias}\n(stop preview)"
         elif state.status == "recording":
             button_state = tk.DISABLED
-            text = f"Kinect id {state.kinect_id}\n(launch preview)"
+            text = f"Kinect id {state.kinect_alias}\n(launch preview)"
         elif state.status == "ready":
             button_state = tk.NORMAL
-            text = f"Kinect id {state.kinect_id}\n(launch preview)"
+            text = f"Kinect id {state.kinect_alias}\n(launch preview)"
         else:
             raise ValueError(f"Unknown recorder {recorder_index} status {state.status}")
 
@@ -350,14 +375,26 @@ class KinRecView(ttk.Frame):
         self._recorders[recorder_index]["label"].configure(text=self._state_template_kinect.format(
             state.status, state.free_space, state.bat_power
         ))
+
+    def params_apply_finalize(self, result: bool):
+        self._apply_params_button['text'] = "Apply" + (" failed" if not result else "")
+        s = ttk.Style()
+        s.configure("Apply.TButton", background="green" if result else "red", foreground="black", height=6)
+
     # ==================================================================================================================
 
     # ================================================ Button callbacks ================================================
     def _callback_apply_params(self):
-        # update example
-        # self._state_kinect_labels[1]['text'] = self._state_template_kinect.format("online", 300, 55)
-        self.update_recorder_state(1, RecorderState(2, "ready", 11, 22))
-        pass
+        params_state = self.state["kinect"]
+        rgb_res = self._rgb_res_params[params_state["rgb_res"].get()]
+        wfov, binned = self._depth_modes_params[params_state["depth_mode"].get()]
+        fps = params_state["fps"].get()
+        sync = params_state["sync"].get()
+        params = KinectParams(rgb_res=rgb_res, depth_wfov=wfov, depth_binned=binned, fps=fps, sync=sync)
+        s = ttk.Style()
+        s.configure("Apply.TButton", background="yellow", foreground="black", height=6)
+        self._apply_params_button['text'] = "Working..."
+        self._controller.apply_kinect_params(params)
 
     def _callback_browse_recordings(self):
         if self.state["recordings_list"]["is_on"].get():
@@ -367,13 +404,13 @@ class KinRecView(ttk.Frame):
             self.state["recordings_list"]["is_on"].set(True)
             self.browser_frame.grid()
 
-    def _callback_rgb_res(self):
+    def _callback_rgb_res(self, *args):
         pass
 
-    def _callback_depth_mode(self):
+    def _callback_depth_mode(self, *args):
         pass
 
-    def _callback_fps(self):
+    def _callback_fps(self, *args):
         pass
 
     def _callback_sync(self):
@@ -382,12 +419,10 @@ class KinRecView(ttk.Frame):
     def _callback_preview(self, recorder_index):
         if self.state["preview"]["is_on"].get():
             # Stop preview
-            # TODO self.controller.stop_preview(recorder_index)
-            self.stop_preview(recorder_index)
+            self._controller.stop_preview(recorder_index)
         else:
             # Launch preview
-            # TODO self.controller.start_preview(recorder_index)
-            self.start_preview(recorder_index)
+            self._controller.start_preview(recorder_index)
 
     def _callback_select_recording(self, recording_id: int):
         pass
@@ -405,6 +440,7 @@ class KinRecView(ttk.Frame):
         ]
 
         messagebox.showinfo("About Demo", '\n'.join(text))
+
     # ==================================================================================================================
 
     def _update_preview_buttons_state(self):
@@ -415,8 +451,10 @@ class KinRecView(ttk.Frame):
             kinect_id = self._recorders[recorder_index]["state"].kinect_id
             if preview_is_on:
                 if recorder_index == preview_recorder_index:
-                    self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_id}\n(stop preview)", state=tk.NORMAL)
+                    self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_id}\n(stop preview)",
+                                                                        state=tk.NORMAL)
                 else:
                     self._recorders[recorder_index]["button"].configure(state=tk.DISABLED)
             else:
-                self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_id}\n(launch preview)", state=tk.NORMAL)
+                self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_id}\n(launch preview)",
+                                                                    state=tk.NORMAL)

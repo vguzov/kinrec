@@ -7,6 +7,7 @@ import base64
 import io
 import websockets
 import os
+from io import BytesIO
 from PIL import Image
 from collections import namedtuple
 from functools import partial
@@ -26,6 +27,7 @@ class RecorderComm:
         pass
 
     callback_names = [
+        "set_kinect_params_reply",
         "get_status_reply",
         "get_kinect_calibration_reply",
         "start_preview_reply",
@@ -96,7 +98,7 @@ class RecorderComm:
     def event_loop_active(self) -> bool:
         return self._event_loop_active
 
-    async def start_event_loop(self):
+    async def event_loop(self):
         self._event_loop_active = True
         while self._event_loop_active:
             await self.process_events()
@@ -127,7 +129,8 @@ class RecorderComm:
                     else:
                         logger.info(f"{cmdt} -- OK")
 
-                    if self._kinect_id is None and cmdt not in ["get_kinect_calibration", "get_status"]:
+                    if self._kinect_id is None and cmdt not in ["get_kinect_calibration", "get_status",
+                                                                "set_kinect_params"]:
                         logger.error(f"Received {cmdt} before obtaining Kinect info")
                         return
 
@@ -141,14 +144,7 @@ class RecorderComm:
                         self.controller_callbacks.start_preview_reply(cmd_result == "OK",
                                                                       info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "get_preview_frame":
-                        if cmd_result == "OK":
-                            data = msg["data"]
-                            data = base64.b64decode(data.encode("utf-8"))
-                            img = np.array(Image.open(data, formats=["jpeg"]))
-                            timestamp = msg["timestamp"]
-                            self.controller_callbacks.get_preview_frame_reply(True, img, timestamp)
-                        else:
-                            self.controller_callbacks.get_preview_frame_reply(False, info=cmd_info)
+                        self._process_preview_frame(msg)
                     elif cmdt == "stop_preview":
                         self.controller_callbacks.stop_preview_reply(cmd_result == "OK",
                                                                      info=None if cmd_result == "OK" else cmd_info)
@@ -235,11 +231,14 @@ class RecorderComm:
         self._current_file_rec_id = None
         self._current_file_rel_path = None
 
-    @property
-    async def kinect_id(self) -> str:
+    async def update_kinect_id(self) -> str:
         event = asyncio.Event()
         await self._send({"type": "get_kinect_calibration"}, event)
         await event.wait()
+        return self._kinect_id
+
+    @property
+    def kinect_id(self) -> str:
         return self._kinect_id
 
     async def set_kinect_params(self, rgb_res, depth_wfov, depth_binned, fps, sync_mode):
@@ -249,7 +248,7 @@ class RecorderComm:
     async def get_kinect_calibration(self):
         await self._send({"type": "get_kinect_calibration"})
 
-    async def get_status(self, full_update = False):
+    async def get_status(self, full_update=False):
         if self._till_full_status_update <= 0 or full_update:
             optionals = ["disk_space", "battery", "recording_fps"]
             self._till_full_status_update = self._full_status_update_step
@@ -261,8 +260,8 @@ class RecorderComm:
     async def start_preview(self):
         await self._send({"type": "start_preview"})
 
-    async def get_preview_frame(self, scale: Union[float, int] = 1):
-        await self._send({"type": "get_preview_frame", "scale": scale})
+    async def get_preview_frame(self, color_scale: Union[float, int] = 1, depth_scale: Optional[int] = 1):
+        await self._send({"type": "get_preview_frame", "color_scale": color_scale, "depth_scale": depth_scale})
 
     async def stop_preview(self):
         await self._send({"type": "stop_preview"})
@@ -310,6 +309,9 @@ class RecorderComm:
         self.controller_callbacks.get_status_reply(False, self._last_state)
         self._connection_close_callback(self._recorder_id)
 
+    def set_kinect_alias(self, kin_alias: int):
+        self._last_state.kinect_alias = kin_alias
+
     def _init_kinect_info(self):
         self._send({"type": "get_kinect_calibration"})
 
@@ -340,3 +342,28 @@ class RecorderComm:
         else:
             self.controller_callbacks.get_kinect_calibration_reply(False, None, None, info=cmd_info)
 
+    def _decode_image(self, data, format="jpeg"):
+        data = base64.b64decode(data.encode("utf-8"))
+        img = np.array(Image.open(BytesIO(data), formats=[format]))
+        return img
+
+    def _process_preview_frame(self, msg):
+        cmd_report = msg['cmd_report']
+        cmd_result = cmd_report["result"]
+        cmd_info = cmd_report["info"]
+        if cmd_result == "OK":
+            color_data = msg["color"]
+            data = color_data["data"]
+            color = self._decode_image(data, "jpeg")
+            color_ts = color_data["timestamp"]
+            depth_data = msg["depth"]
+            if depth_data is not None:
+                data = depth_data["data"]
+                depth = self._decode_image(data, "png")
+                depth_ts = depth_data["timestamp"]
+            else:
+                depth = None
+                depth_ts = None
+            self.controller_callbacks.get_preview_frame_reply(True, color, color_ts, depth, depth_ts)
+        else:
+            self.controller_callbacks.get_preview_frame_reply(False, info=cmd_info)
