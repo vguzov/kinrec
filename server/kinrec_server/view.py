@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
+from PIL import Image, ImageTk
 
 from .internal import RecorderState, RecordsEntry
 from .tk_wrappers import FocusButton, FocusCheckButton, FocusLabelFrame
@@ -118,8 +119,9 @@ class KinRecView(ttk.Frame):
         self.preview_frame.rowconfigure(0, weight=1)
         self.preview_frame.columnconfigure(0, weight=1)
 
-        self._preview_canvas = tk.Canvas(self.preview_frame, highlightthickness=0, cursor="hand1", width=400, height=400)
-        self._preview_canvas.grid(row=0, column=0, sticky='ns', padx=5, pady=5)
+        self.preview_canvas = tk.Canvas(self.preview_frame, highlightthickness=0, cursor="hand1", width=800, height=400)
+        self.preview_image = None
+        self.preview_canvas.grid(row=0, column=0, sticky='nw', padx=5, pady=5)
 
         # self.preview_frame.pack(side=tk.LEFT, fill="both", expand=True, padx=5, pady=5)
         self.preview_frame.grid(row=1, rowspan=3, column=0, sticky="ne", padx=5, pady=5)
@@ -292,6 +294,10 @@ class KinRecView(ttk.Frame):
                 self.preview_frame.grid_remove()
                 self.state["preview"]["is_on"].set(False)
                 self.state["preview"]["recorder_index"].set(-1)
+
+                self.preview_canvas.delete("preview_iamge")
+                self.preview_image = None
+
                 logger.info(f"stopped preview for {recorder_index}")
             else:
                 logger.warning(f"Can't stop preview for {recorder_index}, "
@@ -302,7 +308,13 @@ class KinRecView(ttk.Frame):
         self._update_preview_buttons_state()
 
     def set_preview_frame(self, frame):
-        pass
+        image_tk = ImageTk.PhotoImage(image=Image.fromarray(frame))
+        if self.preview_image is None:
+            self.preview_image = self.preview_canvas.create_image(
+                10, 10, anchor="nw", image=image_tk, tag="preview_iamge"
+            )
+        else:
+            self.preview_canvas.itemconfig(self.preview_image, image=image_tk)
 
     def update_progressbar(self):
         pass
