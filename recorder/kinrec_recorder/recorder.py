@@ -563,12 +563,12 @@ class MainController:
                                "optionals": optionals})
             elif msgt == "shutdown":
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
-                logger.info("Received shutdown message, attempting to call 'shutdown -s now'")
-                os.system("shutdown -s now")
+                logger.info("Received shutdown message, attempting to call 'sudo shutdown -s now'")
+                os.system("sudo shutdown -s now")
             elif msgt == "reboot":
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
-                logger.info("Received reboot message, attempting to call 'shutdown -r now'")
-                os.system("shutdown -r now")
+                logger.info("Received reboot message, attempting to call 'sudo shutdown -r now'")
+                os.system("sudo shutdown -r now")
             else:
                 logger.warning(f"Unrecognized command '{msgt}'")
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt, "recorder fail", "Unrecognized command")})

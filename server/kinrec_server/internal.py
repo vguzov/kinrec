@@ -27,3 +27,9 @@ class KinectParams(NamedTuple):
     depth_binned: bool = False
     fps: int = 30
     sync: bool = False
+
+
+# Exceptions
+class KinectNotReadyException(Exception):
+    pass
+

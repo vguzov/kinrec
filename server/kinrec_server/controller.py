@@ -12,7 +12,7 @@ from PIL import Image
 from collections import defaultdict
 from .recorder_communication import RecorderComm
 from typing import Dict, Optional, Union, Sequence, Mapping
-from .internal import RecorderState, KinectParams
+from .internal import RecorderState, KinectParams, KinectNotReadyException
 from .view import KinRecView
 
 logger = logging.getLogger("KRS.controller")
@@ -35,6 +35,7 @@ class KinRecController:
         self._params_applied_responses = {}
         self._recordings_list = {}
         self._recorder_reclist_responses = {}
+        self._master_recorder = None
 
     def kinect_alias(self, recorder_id: int) -> Optional[int]:
         return self._kinect_id_mapping[self._connected_recorders[recorder_id].kinect_id]
@@ -57,6 +58,46 @@ class KinRecController:
         await recorder.stop_preview()
         self._preview_frame_received.set()
 
+    async def _apply_last_kinect_params(self):
+        kinect_params = self._last_kinect_params
+        recorder_ids = sorted(self._connected_recorders.keys())
+        routines = []
+        if len(recorder_ids) > 0:
+            master_recorder = recorder_ids[0]
+            for recorder_id, recorder in self._connected_recorders.items():
+                sync_mode = "none"
+                if kinect_params.sync:
+                    if recorder_id == master_recorder:
+                        sync_mode = "master"
+                    else:
+                        sync_mode = "sub"
+                self._params_applied_responses[recorder_id] = None
+                routines.append(recorder.set_kinect_params(kinect_params.rgb_res,kinect_params.depth_wfov,
+                                                               kinect_params.depth_binned,
+                                                               kinect_params.fps, sync_mode))
+            await asyncio.gather(*routines)
+            return master_recorder if kinect_params.sync else None
+        else:
+            return None
+
+    async def _start_recording(self, recording_name: str, recording_duration: float, start_delay: float):
+        participating_kinects = [recorder.kinect_id for recorder in self._connected_recorders.values()]
+        if any(x is None for x in participating_kinects):
+            raise KinectNotReadyException("Could not get a kinect id from one of the recorders")
+        participating_kinects = sorted(participating_kinects)
+        master_recorder_id = await self._apply_last_kinect_params()
+        server_time = time.time()
+        recording_id = int(server_time * 1000)  # recording_id is a start time in ms
+        routines = []
+        for recorder_id, recorder in self._connected_recorders.items():
+            delay = 0
+            if master_recorder_id is None or recorder_id == master_recorder_id:
+                delay = start_delay
+            routines.append(recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
+                                     participating_kinects, delay))
+        await asyncio.gather(*routines)
+
+
     def _compile_recordings_list(self, recorderwise_reclists: Dict[int, dict]):
         # TODO: complete the list compilation
         pass
@@ -76,23 +117,13 @@ class KinRecController:
         asyncio.create_task(self._stop_preview(recorder_id))
         return True
 
+    def start_recording(self, recording_name: str, recording_duration: float = None, start_delay: float = 10.):
+        asyncio.create_task(self._start_recording(recording_name, recording_duration, start_delay))
+
     def apply_kinect_params(self, kinect_params: KinectParams):
         self._last_kinect_params = kinect_params
-        recorder_ids = sorted(self._connected_recorders.keys())
-        if len(recorder_ids) > 0:
-            master_recorder = recorder_ids[0]
-            for recorder_id, recorder in self._connected_recorders.items():
-                sync_mode = "none"
-                if kinect_params.sync:
-                    if recorder_id == master_recorder:
-                        sync_mode = "master"
-                    else:
-                        sync_mode = "sub"
-                self._params_applied_responses[recorder_id] = None
-                asyncio.create_task(recorder.set_kinect_params(kinect_params.rgb_res,
-                                                               kinect_params.depth_wfov,
-                                                               kinect_params.depth_binned,
-                                                               kinect_params.fps, sync_mode))
+        asyncio.create_task(self._apply_last_kinect_params())
+
 
     def collect_recordings_info(self):
         self._recordings_list = {}
