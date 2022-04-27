@@ -30,6 +30,29 @@ def statusd(cmd, result="OK", info=""):
     return {"cmd": cmd, "result": result, "info": info}
 
 
+# def se3_inv(R, t):
+#     R = R.copy()
+#     t = t.copy()
+#     R = R.T
+#     t = -(R.T).dot(t)
+#     return R, t
+
+def se3_inv(mtx):
+    mtx = mtx.copy()
+    R = mtx[:3, :3].copy()
+    t = mtx[:3, 3].copy()
+    mtx[:3, :3] = R.T
+    mtx[:3, 3] = -(R.T).dot(t)
+    return mtx
+
+
+def make_RT(R, t):
+    RT = np.eye(4)
+    RT[:3, :3] = R
+    RT[:3, 3] = t
+    return RT
+
+
 class Kinect:
     class DoubleActivationException(Exception):
         pass
@@ -62,8 +85,9 @@ class Kinect:
         self.init_frame_timeout = 5.
         self.regular_frame_timeout = 1 / 10.
         self.update_params()
-        self.calibration = None
-        self.depth2d3dmap = None
+        self.depth_calibration = None
+        self.color_calibration = None
+        self.depth2pc_map = None
         self._id = None
         self.active = False
 
@@ -85,8 +109,9 @@ class Kinect:
         except Kinect.FrameGetFailException:
             self.device = None
             self.active = False
-            self.calibration = None
-            self.depth2d3dmap = None
+            self.depth_calibration = None
+            self.color_calibration = None
+            self.depth2pc_map = None
             kin.close()
             raise
 
@@ -139,10 +164,10 @@ class Kinect:
     def update_calibration(self):
         if not self.active:
             raise Kinect.NotActivatedException()
-        if self.calibration is None:
-            # TODO: implement get_full_calibration, get_depth2d3dmap
-            # self.calibration = self.device.get_full_calibration()
-            # self.depth2d3dmap = self.device.get_depth2d3dmap()
+        if self.color_calibration is None:
+            self.depth_calibration = self.device.get_depth_calibration()
+            self.color_calibration = self.device.get_color_calibration()
+            self.depth2pc_map = self.device.get_depth2pc_map()
             self._id = self.device.get_serial_number()
 
     def stop(self):
@@ -151,18 +176,39 @@ class Kinect:
         self.device.close()
         self.device = None
         self.active = False
-        self.calibration = None
-        self.depth2d3dmap = None
+        self.depth_calibration = None
+        self.color_calibration = None
+        self.depth2pc_map = None
 
     @property
     def calibration_dict(self):
-        if self.calibration is None:
+        def intrinsics_to_dict(calib, add_opencv=True):
+            calib_dict = {x: getattr(calib, x) for x in ['cx', 'cy', 'fx', 'fy', 'k1', 'k2', 'k3', 'k4',
+                                                         'k5', 'k6', 'p1', 'p2', 'codx', 'cody', 'width', 'height']}
+            if add_opencv:
+                calib_dict["opencv"] = [calib_dict[x] for x in
+                                        ['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6']]
+            return calib_dict
+
+        if self.color_calibration is None:
             return None
-        # TODO: finalize
-        return {"color": {"cx": self.calibration.color.cx, "cy": self.calibration.color.cy},
-                "depth": {},
-                "color2depth": {"R": None, "t": None},
-                "depth2color": {"R": None, "t": None},
+        color_calib_dict = intrinsics_to_dict(self.color_calibration)
+        depth_calib_dict = intrinsics_to_dict(self.depth_calibration)
+        color_R = self.color_calibration.get_rotation_matrix()
+        depth_R = self.depth_calibration.get_rotation_matrix()
+        color_t = self.color_calibration.get_translation_vector() / 1000.
+        depth_t = self.depth_calibration.get_translation_vector() / 1000.
+        color_RT = make_RT(color_R, color_t)  # color2world
+        depth_RT = make_RT(depth_R, depth_t)  # depth2world
+        color_RT_inv = se3_inv(color_RT)  # world2color
+        depth_RT_inv = se3_inv(depth_RT)  # world2depth
+        color2depth_RT = depth_RT_inv.dot(color_RT)
+        depth2color_RT = color_RT_inv.dot(depth_RT)
+
+        return {"color": color_calib_dict,
+                "depth": depth_calib_dict,
+                "color2depth": {"R": color2depth_RT[:3, :3].tolist(), "t": color2depth_RT[:3, 3].tolist()},
+                "depth2color": {"R": depth2color_RT[:3, :3].tolist(), "t": depth2color_RT[:3, 3].tolist()},
                 "params": self.params}
 
     @property
@@ -261,12 +307,14 @@ class MainController:
             if scale != 1:
                 img = img[::scale, ::scale]
             return img
+
         color, depth, color_ts, depth_ts = self.kinect.get_next_frame()
         if isinstance(color_scale, int):
             color = int_scale(color, color_scale)
         else:
             if color.dtype == np.uint8:
-                color = (rescale(color.astype(np.float32) / 255., 1. / color_scale, multichannel=True) * 255.).astype(
+                color = (rescale(color.astype(np.float32) / 255., 1. / color_scale,
+                                 multichannel=True) * 255.).astype(
                     np.uint8)
             else:
                 color = rescale(color, 1. / color_scale, multichannel=True)
@@ -285,7 +333,8 @@ class MainController:
 
     def start_recording(self, recording_id, recording_name, recording_duration, server_time, participating_kinects,
             start_delay=0):
-        curr_recording_dir = os.path.join(self.recordings_dir, self.get_recording_dirname(recording_id, recording_name))
+        curr_recording_dir = os.path.join(self.recordings_dir,
+                                          self.get_recording_dirname(recording_id, recording_name))
         if os.path.exists(curr_recording_dir):
             raise MainController.RecordingExistsException()
         os.makedirs(curr_recording_dir)
@@ -335,7 +384,8 @@ class MainController:
             if os.path.isdir(dirpath) and all(os.path.exists(os.path.join(dirpath, x)) for x in essential_files):
                 local_metadata = json.load(open(os.path.join(dirpath, "metadata.json")))
                 metadata = {k: local_metadata[k] for k in ["id", "name", "duration", "server_time",
-                                                           "kinect_id", "participating_kinects", "kinect_calibration"]}
+                                                           "kinect_id", "participating_kinects",
+                                                           "kinect_calibration"]}
                 if with_size:
                     size = 0
                     for filename in essential_files[1:]:
@@ -447,7 +497,7 @@ class MainController:
                     if depth_scale is not None:
                         depth_data = {"timestamp": depth_ts, "data": self.image_encode(depth, "png")}
                     self.net.send({"type": "preview_frame", "cmd_report":
-                        statusd(msgt), "color":color_data, "depth": depth_data})
+                        statusd(msgt), "color": color_data, "depth": depth_data})
             elif msgt == "stop_preview":
                 try:
                     self.stop_kinect()
@@ -484,14 +534,17 @@ class MainController:
                 rec_dict = self.get_recordings()
                 self.net.send({"type": "recordings_list", "cmd_report": statusd(msgt), "recordings": rec_dict})
             elif msgt == "collect":
+                recording_id = msg["recording_id"]
                 try:
-                    added_files = self.add_recordings_sendfile_queue(msg["recording_id"])
+                    added_files = self.add_recordings_sendfile_queue(recording_id)
                 except FileNotFoundError:
                     self.net.send({"type": "pong", "cmd_report": statusd(msgt, "recorder fail",
-                                                                         f"Recording {msg['recording_id']} does not exist")})
+                                                                         f"Recording {msg['recording_id']} does not exist"),
+                                   "recording_id": recording_id, "files": None})
                 else:
                     self.net.send({"type": "pong", "cmd_report": statusd(msgt, info=f"Will transfer"
-                                                                                    f" {len(added_files)} files")})
+                                                                                    f" {len(added_files)} files"),
+                                   "recording_id": recording_id, "files": added_files})
             elif msgt == "stop_collect":
                 if self.current_sendfile is not None:
                     self.current_sendfile.close()
@@ -559,7 +612,8 @@ class MainController:
                                 percent = battery.percent
                                 optionals["battery"] = {"percent": percent, "plugged": plugged}
                 self.net.send({"type": "status", "cmd_report": statusd(msgt),
-                               "kinect_status": kin_state, "info": info, "transferring": len(self.sendfile_queue) > 0,
+                               "kinect_status": kin_state, "info": info,
+                               "transferring": len(self.sendfile_queue) > 0,
                                "optionals": optionals})
             elif msgt == "shutdown":
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
@@ -571,5 +625,6 @@ class MainController:
                 os.system("sudo shutdown -r now")
             else:
                 logger.warning(f"Unrecognized command '{msgt}'")
-                self.net.send({"type": "pong", "cmd_report": statusd(msgt, "recorder fail", "Unrecognized command")})
+                self.net.send(
+                    {"type": "pong", "cmd_report": statusd(msgt, "recorder fail", "Unrecognized command")})
         logger.info("Main controller loop completed")

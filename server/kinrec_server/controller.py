@@ -11,8 +11,8 @@ from skimage.io import imsave
 from PIL import Image
 from collections import defaultdict
 from .recorder_communication import RecorderComm
-from typing import Dict, Optional, Union, Sequence, Mapping
-from .internal import RecorderState, KinectParams, KinectNotReadyException
+from typing import Dict, Optional, Union, Sequence, Mapping, List
+from .internal import RecorderState, KinectParams, KinectNotReadyException, RecorderDisconnectedException, RecordsEntry
 from .view import KinRecView
 
 logger = logging.getLogger("KRS.controller")
@@ -33,9 +33,14 @@ class KinRecController:
         self._depth_preview_thresh = 5000.
         self._last_kinect_params = KinectParams()
         self._params_applied_responses = {}
-        self._recordings_list = {}
+        self._recordings_database: Dict[int, RecordsEntry] = {}
         self._recorder_reclist_responses = {}
         self._master_recorder = None
+        self._curr_recording_participating_kinects = None
+        self._curr_recording_started_ids: Optional[set] = None
+        self._curr_recording_stopped_ids: Optional[set] = None
+        self._curr_state = "idle"
+        self._files_to_collect: Dict[int, List[str]] = defaultdict(list)
 
     def kinect_alias(self, recorder_id: int) -> Optional[int]:
         return self._kinect_id_mapping[self._connected_recorders[recorder_id].kinect_id]
@@ -72,9 +77,9 @@ class KinRecController:
                     else:
                         sync_mode = "sub"
                 self._params_applied_responses[recorder_id] = None
-                routines.append(recorder.set_kinect_params(kinect_params.rgb_res,kinect_params.depth_wfov,
-                                                               kinect_params.depth_binned,
-                                                               kinect_params.fps, sync_mode))
+                routines.append(recorder.set_kinect_params(kinect_params.rgb_res, kinect_params.depth_wfov,
+                                                           kinect_params.depth_binned,
+                                                           kinect_params.fps, sync_mode))
             await asyncio.gather(*routines)
             return master_recorder if kinect_params.sync else None
         else:
@@ -85,6 +90,7 @@ class KinRecController:
         if any(x is None for x in participating_kinects):
             raise KinectNotReadyException("Could not get a kinect id from one of the recorders")
         participating_kinects = sorted(participating_kinects)
+        self._curr_recording_participating_kinects = set(participating_kinects)
         master_recorder_id = await self._apply_last_kinect_params()
         server_time = time.time()
         recording_id = int(server_time * 1000)  # recording_id is a start time in ms
@@ -94,19 +100,45 @@ class KinRecController:
             if master_recorder_id is None or recorder_id == master_recorder_id:
                 delay = start_delay
             routines.append(recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
-                                     participating_kinects, delay))
+                                                     participating_kinects, delay))
         await asyncio.gather(*routines)
 
+    def _clear_from_last_recording(self):
+        self._curr_recording_participating_kinects = None
+        self._master_recorder = None
+        self._curr_recording_started_ids = None
+        self._curr_recording_stopped_ids = None
 
     def _compile_recordings_list(self, recorderwise_reclists: Dict[int, dict]):
         # TODO: complete the list compilation
         pass
+
+    async def _collect_recordings(self, recordings_to_collect):
+        routines = []
+        for rec_id in recordings_to_collect:
+            logger.info(f"Collecting recording {rec_id}")
+            recording = self._recordings_database[rec_id]
+            participating_kinects = set(recording.participating_kinects)
+            curr_routines = []
+            ready_kinects = set()
+            self._curr_collection_participating_recorders = []
+            for recorder_id, recorder in self._connected_recorders.items():
+                if recorder.kinect_id in participating_kinects:
+                    curr_routines.append(recorder.collect(rec_id))
+                    ready_kinects.add(recorder.kinect_id)
+            if ready_kinects == participating_kinects:
+                routines += curr_routines
+            else:
+                logger.error(
+                    f"Recording {rec_id} cannot be collected: the following kinects are missing {participating_kinects - ready_kinects}")
+        await asyncio.gather(*routines)
 
     ### Actions ###
     def start_preview(self, recorder_id: int) -> bool:
         if recorder_id not in self._connected_recorders:
             logger.warning(f"A preview for recorder {recorder_id} was asked, but not such recorder exists")
             return False
+        self._curr_state = "preview"
         asyncio.create_task(self._start_preview(recorder_id))
         return True
 
@@ -114,19 +146,36 @@ class KinRecController:
         if recorder_id not in self._connected_recorders:
             logger.warning(f"A 'stop preview' for recorder {recorder_id} was asked, but not such recorder exists")
             return False
+        self._curr_state = "idle"
         asyncio.create_task(self._stop_preview(recorder_id))
         return True
 
     def start_recording(self, recording_name: str, recording_duration: float = None, start_delay: float = 10.):
+        self._curr_recording_started_ids = set()
+        self._curr_state = "recording"
         asyncio.create_task(self._start_recording(recording_name, recording_duration, start_delay))
+
+    def stop_recording(self):
+        self._curr_recording_stopped_ids = set()
+        server_time = time.time()
+        for recorder_id in self._curr_recording_participating_kinects:
+            if recorder_id not in self._connected_recorders:
+                logger.error(f"Failed to stop the recording: {recorder_id} disconnected")
+                # raise RecorderDisconnectedException(f"Failed to stop the recording: {recorder_id} disconnected")
+        self._curr_state = "idle"
+        for recorder_id in self._curr_recording_participating_kinects:
+            recorder = self._connected_recorders[recorder_id]
+            asyncio.create_task(recorder.stop_recording(server_time))
 
     def apply_kinect_params(self, kinect_params: KinectParams):
         self._last_kinect_params = kinect_params
         asyncio.create_task(self._apply_last_kinect_params())
 
+    def collect_recordings(self, recording_ids: Sequence[int]):
+        asyncio.create_task(self._collect_recordings(recording_ids))
 
     def collect_recordings_info(self):
-        self._recordings_list = {}
+        self._recordings_database = {}
         for recorder_id, recorder in self._connected_recorders.items():
             self._recorder_reclist_responses[recorder_id] = None
             asyncio.create_task(recorder.get_recordings_list())
@@ -219,10 +268,27 @@ class KinRecController:
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Preview failed to stop, more info: {info}")
 
     def comm_start_recording_reply(self, recorder_id: int, reply_result: bool, info: str = None):
-        pass
+        if reply_result:
+            self._curr_recording_started_ids.add(recorder_id)
+        else:
+            kin_alias = self.kinect_alias(recorder_id)
+            logger.warning(f"Recorder {recorder_id}:{kin_alias} Recording failed to start, more info: {info}")
+            self.stop_recording()
+            # TODO: add view callback to fail recording start
+        if self._curr_recording_started_ids == self._curr_recording_participating_kinects:
+            # TODO: add view callback to finalize recording start
+            pass
 
     def comm_stop_recording_reply(self, recorder_id: int, reply_result: bool, info: str = None):
-        pass
+        if reply_result:
+            self._curr_recording_stopped_ids.add(recorder_id)
+        else:
+            kin_alias = self.kinect_alias(recorder_id)
+            logger.warning(f"Recorder {recorder_id}:{kin_alias} Recording failed to stop, more info: {info}")
+            self._curr_recording_stopped_ids.add(recorder_id)
+        if self._curr_recording_stopped_ids == self._curr_recording_participating_kinects:
+            # TODO: add view callback to finalize recording stop
+            self._clear_from_last_recording()
 
     def comm_get_recordings_list_reply(self, recorder_id: int, reply_result: bool, recordings: Dict[int, dict] = None,
             info: str = None):
@@ -231,15 +297,20 @@ class KinRecController:
         else:
             self._recorder_reclist_responses[recorder_id] = {}
             kin_alias = self.kinect_alias(recorder_id)
-            logger.warning(
-                f"Recorder {recorder_id}:{kin_alias} Preview failed to acquire recordings, more info: {info}")
+            logger.error(
+                f"Recorder {recorder_id}:{kin_alias} failed to acquire recordings, more info: {info}")
         replies = list(self._recorder_reclist_responses.values())
         completed_replies = [x is not None for x in replies]
         if all(completed_replies):
             self._compile_recordings_list(self._recorder_reclist_responses)
 
-    def comm_collect_reply(self, recorder_id: int, reply_result: bool, info: str = None):
-        pass
+    def comm_collect_reply(self, recorder_id: int, reply_result: bool, recording_id: int, files: List[str], info: str = None):
+        if not reply_result:
+            kin_alias = self.kinect_alias(recorder_id)
+            logger.error(f"Recorder {recorder_id}:{kin_alias} failed to acquire recording {recording_id}, more info: {info}")
+        else:
+            self._files_to_collect[recorder_id]+=files
+            logger.info(f"Will collect {len(files)} for recording {recording_id}")
 
     def comm_delete_recording_reply(self, recorder_id: int, reply_result: bool, info: str = None):
         pass
@@ -248,17 +319,33 @@ class KinRecController:
         pass
 
     def comm_shutdown_reply(self, recorder_id: int, reply_result: bool, info: str = None):
-        pass
+        kin_alias = self.kinect_alias(recorder_id)
+        if reply_result:
+            logger.warning(f"Recorder {recorder_id}:{kin_alias} shutdown")
+        else:
+            logger.error(f"Recorder {recorder_id}:{kin_alias} failed to shut down, more info: {info}")
 
     def comm_reboot_reply(self, recorder_id: int, reply_result: bool, info: str = None):
-        pass
+        kin_alias = self.kinect_alias(recorder_id)
+        if reply_result:
+            logger.warning(f"Recorder {recorder_id}:{kin_alias} reboot")
+        else:
+            logger.error(f"Recorder {recorder_id}:{kin_alias} failed to reboot, more info: {info}")
 
     def comm_file_receive_start(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_size: int):
-        pass
+        kin_alias = self.kinect_alias(recorder_id)
+        logger.info(
+            f"Will receive a file {file_rel_path} ({file_size / 2 ** 20:.2f}MB) from recorder {recorder_id}:{kin_alias}")
 
     def comm_file_receive_update(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_curr_received: int):
         pass
 
     def comm_file_receive_end(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_size: int,
             file_received: int):
-        pass
+        kin_alias = self.kinect_alias(recorder_id)
+        if file_size != file_received:
+            logger.error(
+                f"Received a corrupt file from {recorder_id}:{kin_alias}: {file_rel_path}, "
+                f"received {file_received / 2 * 20:.2f}MB, expected {file_size / 2 * 20:.2f}MB")
+        else:
+            logger.info(f"Received a file from {recorder_id}:{kin_alias}: {file_rel_path}")

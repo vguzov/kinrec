@@ -2,13 +2,13 @@ import logging
 from argparse import ArgumentParser
 
 from kinrec_server.app import KinRecApp
+from kinrec_server.internal import ColoredFormatter
 
 logger = logging.getLogger("KRS")
 logger.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.INFO)
-stream_handler.setFormatter(logging.Formatter('%(asctime)s:%(name)s:%(levelname)s::: %(message)s',
-                                              datefmt='%H:%M:%S'))
+stream_handler.setFormatter(ColoredFormatter())
 logger.addHandler(stream_handler)
 
 ws_logger = logging.getLogger("websockets")

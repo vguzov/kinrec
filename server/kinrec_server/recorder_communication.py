@@ -160,7 +160,8 @@ class RecorderComm:
                         else:
                             self.controller_callbacks.get_recordings_list_reply(False, info=cmd_info)
                     elif cmdt == "collect":
-                        self.controller_callbacks.collect_reply(cmd_result == "OK",
+                        self.controller_callbacks.collect_reply(cmd_result == "OK", recording_id=msg['recording_id'],
+                                                                files=msg['files'],
                                                                 info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "delete_recording":
                         self.controller_callbacks.delete_recording_reply(cmd_result == "OK",
