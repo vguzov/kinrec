@@ -37,6 +37,7 @@ class KinRecView(ttk.Frame):
         self.number_of_kinects = number_of_kinects
 
         # Constant parameters
+        # TODO move this to KinectParams class
         self._rgb_resolutions = {
             "1280x720": (1280, 720), "1920x1080": (1920, 1080), "2560x1440": (2560, 1440),
             "2048x1536": (2048, 1536), "3840x2160": (3840, 2160), "4096x3072": (4096, 3072)
@@ -60,6 +61,7 @@ class KinRecView(ttk.Frame):
         # Styles for buttons
         s = ttk.Style()
         s.configure("Apply.TButton", background="green", foreground="black", height=6)
+        s.configure("Record.TButton", background="red", foreground="black", height=6)
 
         # Initialize variables
         self._init_view_state()
@@ -101,7 +103,11 @@ class KinRecView(ttk.Frame):
                 "sync": tk.BooleanVar(value=False),
             },
             "recording": {
-
+                "name": tk.StringVar(value=""),
+                "duration": tk.StringVar(value="-1"),
+                "delay": tk.StringVar(value="0")
+                #"duration": tk.IntVar(value=-1),
+                #"delay": tk.IntVar(value=-0)
             },
             "recordings_list": {
                 "is_on": tk.BooleanVar(value=False),
@@ -229,14 +235,37 @@ class KinRecView(ttk.Frame):
         FocusCheckButton(root, text=' Synchronize', command=self._callback_sync,
                          variable=self.state['kinect']['sync']).grid(row=2, column=2, padx=5, sticky='e')
 
+    # TODO change entries to BoundedNumericalEntry
     def _add_recording_frame(self):
         self.recording_frame = FocusLabelFrame(self, text="Recording")
         self.recording_frame.grid(row=2, column=1, padx=5, pady=5)
         root = self.recording_frame
 
+        # Row 0
+        tk.Label(root, text="Name: ").grid(row=0, column=0, padx=5, pady=1, sticky='ew')
+        self.recording_name = tk.Entry(root, textvariable=self.state["recording"]["name"], width=20)
+        self.recording_name.grid(row=0, column=1, columnspan=2, padx=5, pady=1, sticky='ew')
+        # Row 1
+        tk.Label(root, text="Duration (sec.): ").grid(row=1, column=0, columnspan=2, padx=5, pady=1, sticky='ew')
+        self.recording_duration = tk.Entry(root, textvariable=self.state["recording"]["duration"], width=5)
+        self.recording_duration.grid(row=1, column=2, padx=5, pady=1, sticky='ew')
+        # Row 2
+        tk.Label(root, text="Delay (sec.): ").grid(row=2, column=0, columnspan=2, padx=5, pady=1, sticky='ew')
+        self.recording_duration = tk.Entry(root, textvariable=self.state["recording"]["delay"], width=5)
+        self.recording_duration.grid(row=2, column=2, padx=5, pady=1, sticky='ew')
+        # Row 3
+        self.recording_status_label = tk.Label(
+            root, text="Press Record! to start recording", width=35
+        )
+        self.recording_status_label.grid(row=3, column=0, columnspan=3, padx=5, pady=1, sticky='ew')
+        # Side button 1
         FocusButton(
-            root, text='Browse recordings', width=10, command=self._callback_browse_recordings
-        ).grid(row=0, column=0, padx=5, pady=5)
+            root, text='Record!', width=10, command=self._callback_start_recording, style="Record.TButton",
+        ).grid(row=0, rowspan=2, column=4, padx=5, pady=5)
+        # Side button 2
+        FocusButton(
+            root, text='Browse\nrecordings', width=10, command=self._callback_browse_recordings
+        ).grid(row=2, rowspan=2, column=4, padx=5, pady=5)
 
     def _add_state_frame(self):
         self.state_frame = FocusLabelFrame(self, text="State")
@@ -376,10 +405,35 @@ class KinRecView(ttk.Frame):
             state.status, state.free_space, state.bat_power
         ))
 
+    # TODO rename to apply_kinect_params_reply
+    # TODO change params to kinect_params elsewhere
+    # TODO change to warning box
+    # TODO add freeze and unfreeze via params
     def params_apply_finalize(self, result: bool):
-        self._apply_params_button['text'] = "Apply" + (" failed" if not result else "")
+        self._apply_params_button['text'] = "Apply" + ("\nfailed" if not result else "")
         s = ttk.Style()
         s.configure("Apply.TButton", background="green" if result else "red", foreground="black", height=6)
+
+    # TODO finish init params
+    # def kinect_params_init(self, params: KinectParams):
+    #     KinectParams(rgb_res=rgb_res, depth_wfov=wfov, depth_binned=binned, fps=fps, sync=sync)
+    #
+    #     self.state["kinect"]
+    #     rgb_res = self._rgb_res_params[params_state["rgb_res"].get()]
+    #     wfov, binned = self._depth_modes_params[params_state["depth_mode"].get()]
+    #     fps = params_state["fps"].get()
+    #     sync = params_state["sync"].get()
+
+    def start_recording_reply(self):
+        # TODO add timer
+        # TODO change recording button style
+        name = self.state["recording"]["name"].get()
+        self.recording_status_label.configure(text=f"Recording {name} in progress.")
+
+    def stop_recording(self):
+        # TODO change recording button style
+        self.state["recording"]["name"].set(value="")
+        self.recording_status_label.configure(text="Press Record! to start recording")
 
     # ==================================================================================================================
 
@@ -423,6 +477,13 @@ class KinRecView(ttk.Frame):
         else:
             # Launch preview
             self._controller.start_preview(recorder_index)
+
+    def _callback_start_recording(self):
+        name = self.state["recording"]["name"].get()
+        duration = int(self.state["recording"]["duration"].get())
+        delay = int(self.state["recording"]["delay"].get())
+
+        # TODO add controller start recording call
 
     def _callback_select_recording(self, recording_id: int):
         pass
