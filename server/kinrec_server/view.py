@@ -13,21 +13,6 @@ logger = logging.getLogger("KRS.view")
 
 
 class KinRecView(ttk.Frame):
-    _rgb_res_params = {
-        "1280x720": 720,
-        "1920x1080": 1080,
-        "2560x1440": 1440,
-        "2048x1536": 1536,
-        "3840x2160": 2160,
-        "4096x3072": 3072
-    }
-    _depth_modes_params = {
-        # WFOV, binned
-        "WFOV unbinned (1024x1024)": (True, False),
-        "WFOV binned    (512x512)": (True, True),
-        "NFOV unbinned  (640x576)": (False, False),
-        "NFOV binned    (320x288)": (False, True)
-    }
     def __init__(self, parent, number_of_kinects=4):
         super().__init__(parent)
         self._preview_frame_size = (800, 400)
@@ -35,18 +20,6 @@ class KinRecView(ttk.Frame):
         self.pack(fill="both", expand=True)
         self._controller = None
         self.number_of_kinects = number_of_kinects
-
-        # Constant parameters
-        # TODO move this to KinectParams class
-        self._rgb_resolutions = {
-            "1280x720": (1280, 720), "1920x1080": (1920, 1080), "2560x1440": (2560, 1440),
-            "2048x1536": (2048, 1536), "3840x2160": (3840, 2160), "4096x3072": (4096, 3072)
-        }
-        self._depth_modes = {
-            "WFOV unbinned (1024x1024)": (1024, 1024), "WFOV binned    (512x512)": (512, 512),
-            "NFOV unbinned  (640x576)": (640, 576), "NFOV binned    (320x288)": (320, 288)
-        }
-        self._fps = [5, 10, 15, 30]
 
         # Variables to store state of the system
         self._state_template_kinect = "Status: {}\nFree space: {:03d} GB\nBatt. power: {:03d}%"
@@ -57,6 +30,7 @@ class KinRecView(ttk.Frame):
             "label": None
         } for _ in range(self.number_of_kinects)]
         self._state_server = "offline"
+        self._params_kinect: KinectParams = KinectParams()
 
         # Initialize variables
         self._init_view_state()
@@ -95,9 +69,9 @@ class KinRecView(ttk.Frame):
     def _init_view_state(self):
         self.state = {
             "kinect": {
-                "rgb_res": tk.StringVar(value=list(self._rgb_resolutions)[0]),
-                "depth_mode": tk.StringVar(value=list(self._depth_modes)[0]),
-                "fps": tk.IntVar(value=self._fps[0]),
+                "rgb_res": tk.StringVar(value=list(self._params_kinect._rgb_res_str2val)[0]),
+                "depth_mode": tk.StringVar(value=list(self._params_kinect._depth_mode_str2val)[0]),
+                "fps": tk.IntVar(value=self._params_kinect._fps_range[0]),
                 "sync": tk.BooleanVar(value=False),
             },
             "recording": {
@@ -221,7 +195,7 @@ class KinRecView(ttk.Frame):
         # Row 0
         tk.Label(root, text="RGB resolution (H x W)").grid(row=0, column=0, columnspan=2, padx=5, pady=1, sticky='w')
         menu = tk.OptionMenu(root, self.state["kinect"]["rgb_res"],
-                             *list(self._rgb_resolutions), command=self._callback_rgb_res)
+                             *list(self._params_kinect._rgb_res_str2val), command=self._callback_rgb_res)
         menu.config(width=12)
         menu.grid(row=0, column=2, padx=5, sticky='e')
         self.apply_params_button = FocusButton(root, text='Apply', width=10, style="KinectParams_Apply.TButton",
@@ -230,13 +204,13 @@ class KinRecView(ttk.Frame):
         # Row 1
         tk.Label(root, text="Depth mode").grid(row=1, column=0, columnspan=1, padx=5, pady=1, sticky='w')
         menu = tk.OptionMenu(root, self.state["kinect"]["depth_mode"],
-                             *list(self._depth_modes), command=self._callback_depth_mode)
+                             *list(self._params_kinect._depth_mode_str2val), command=self._callback_depth_mode)
         menu.config(width=25)
         menu.grid(row=1, column=1, columnspan=2, padx=5, sticky='e')
         # Row 2
         tk.Label(root, text="FPS").grid(row=2, column=0, padx=5, pady=1, sticky='w')
         menu = tk.OptionMenu(root, self.state["kinect"]["fps"],
-                             *list(self._fps), command=self._callback_fps)
+                             *list(self._params_kinect._fps_range), command=self._callback_fps)
         menu.config(width=3)
         menu.grid(row=2, column=1, padx=5, sticky='w')
         FocusCheckButton(root, text=' Synchronize', command=self._callback_sync,
@@ -438,20 +412,18 @@ class KinRecView(ttk.Frame):
     # TODO add freeze and unfreeze via params
     def params_apply_finalize(self, result: bool):
         if result:
+            # save new default kinect parameters
+            self._params_kinect = self._get_kinect_params_from_view()
             self.add_destroyable_message("info", "Kinect params applied successfully!")
         else:
+            # update params to previous values
+            self._update_kinect_params_view(self._params_kinect)
             self.add_destroyable_message("warning", "Kinect params were NOT applied!")
         self._update_apply_button_state(state="applied")
 
-    # TODO finish init params
-    # def kinect_params_init(self, params: KinectParams):
-    #     KinectParams(rgb_res=rgb_res, depth_wfov=wfov, depth_binned=binned, fps=fps, sync=sync)
-    #
-    #     self.state["kinect"]
-    #     rgb_res = self._rgb_res_params[params_state["rgb_res"].get()]
-    #     wfov, binned = self._depth_modes_params[params_state["depth_mode"].get()]
-    #     fps = params_state["fps"].get()
-    #     sync = params_state["sync"].get()
+    def kinect_params_init(self, params: KinectParams):
+        self._params_kinect = params
+        self._update_kinect_params_view(params)
 
     def start_recording_reply(self):
         # TODO add timer
@@ -476,12 +448,7 @@ class KinRecView(ttk.Frame):
 
     # ================================================ Button callbacks ================================================
     def _callback_apply_params(self):
-        params_state = self.state["kinect"]
-        rgb_res = self._rgb_res_params[params_state["rgb_res"].get()]
-        wfov, binned = self._depth_modes_params[params_state["depth_mode"].get()]
-        fps = params_state["fps"].get()
-        sync = params_state["sync"].get()
-        params = KinectParams(rgb_res=rgb_res, depth_wfov=wfov, depth_binned=binned, fps=fps, sync=sync)
+        params = self._get_kinect_params_from_view()
         self._update_apply_button_state(state="in progress")
 
         self._controller.apply_kinect_params(params)
@@ -547,6 +514,20 @@ class KinRecView(ttk.Frame):
         messagebox.showinfo("About Demo", '\n'.join(text))
 
     # ==================================================================================================================
+
+    def _update_kinect_params_view(self, params: KinectParams):
+        self.state["kinect"]["rgb_res"].set(value=self._params_kinect._rgb_res_val2str[params.rgb_res])
+        self.state["kinect"]["depth_mode"].set(value=self._params_kinect._depth_mode_val2str[(params.depth_wfov , params.depth_binned)])
+        self.state["kinect"]["fps"].set(value=params.fps)
+        self.state["kinect"]["sync"].set(value=params.sync)
+
+    def _get_kinect_params_from_view(self):
+        params_state = self.state["kinect"]
+        rgb_res = self._params_kinect._rgb_res_str2val[params_state["rgb_res"].get()]
+        wfov, binned = self._params_kinect._depth_mode_str2val[params_state["depth_mode"].get()]
+        fps = params_state["fps"].get()
+        sync = params_state["sync"].get()
+        return KinectParams(rgb_res=rgb_res, depth_wfov=wfov, depth_binned=binned, fps=fps, sync=sync)
 
     def _update_apply_button_state(self, state: str):
         assert state in ["applied", "not applied", "in progress"], \
