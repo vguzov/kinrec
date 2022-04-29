@@ -224,7 +224,7 @@ class KinRecView(ttk.Frame):
                              *list(self._rgb_resolutions), command=self._callback_rgb_res)
         menu.config(width=12)
         menu.grid(row=0, column=2, padx=5, sticky='e')
-        self.apply_params_button = FocusButton(root, text='Apply', width=5, style="KinectParams_Apply.TButton",
+        self.apply_params_button = FocusButton(root, text='Apply', width=10, style="KinectParams_Apply.TButton",
                                                command=self._callback_apply_params)
         self.apply_params_button.grid(row=0, rowspan=3, column=4, padx=5, ipady=20)
         # Row 1
@@ -441,7 +441,7 @@ class KinRecView(ttk.Frame):
             self.add_destroyable_message("info", "Kinect params applied successfully!")
         else:
             self.add_destroyable_message("warning", "Kinect params were NOT applied!")
-        self.apply_params_button.configure(text="Apply", style="KinectParams_Apply.TButton")
+        self._update_apply_button_state(state="applied")
 
     # TODO finish init params
     # def kinect_params_init(self, params: KinectParams):
@@ -455,25 +455,22 @@ class KinRecView(ttk.Frame):
 
     def start_recording_reply(self):
         # TODO add timer
-        # TODO change recording button style
         # Change internal flag
         self.state["recording"]["is_on"].set(value=True)
         # Set status frame
         name = self.state["recording"]["name"].get()
         self.recording_status_label.configure(text=f"Recording {name} in progress.")
         # Change button style
-        self.recording_start_button.configure(text="Stop", style="Recording_Stop.TButton")
-
+        self._update_recording_button_state(state="recording")
 
     def stop_recording(self):
-        # TODO change recording button style
         # Change internal flag
         self.state["recording"]["is_on"].set(value=False)
         # Set status frame
         self.state["recording"]["name"].set(value="")
         self.recording_status_label.configure(text="Press Record! to start recording")
         # Change button style
-        self.recording_start_button.configure(text="Record!", style="Recording_Record.TButton")
+        self._update_recording_button_state(state="not recording")
 
     # ==================================================================================================================
 
@@ -485,29 +482,31 @@ class KinRecView(ttk.Frame):
         fps = params_state["fps"].get()
         sync = params_state["sync"].get()
         params = KinectParams(rgb_res=rgb_res, depth_wfov=wfov, depth_binned=binned, fps=fps, sync=sync)
-        self.apply_params_button.configure(text="In Progress", style="InProgress.TButton")
+        self._update_apply_button_state(state="in progress")
+
         self._controller.apply_kinect_params(params)
 
     def _callback_browse_recordings(self):
         if self.state["recordings_list"]["is_on"].get():
             self.state["recordings_list"]["is_on"].set(False)
             self.browser_frame.grid_remove()
-            # TODO change style of self.recording_browse_button
+            self.recording_browse_button.configure(text="Browse\nrecordings")
         else:
             self.state["recordings_list"]["is_on"].set(True)
             self.browser_frame.grid()
+            self.recording_browse_button.configure(text="Close\nbrowser")
 
     def _callback_rgb_res(self, *args):
-        pass
+        self._update_apply_button_state(state="not applied")
 
     def _callback_depth_mode(self, *args):
-        pass
+        self._update_apply_button_state(state="not applied")
 
     def _callback_fps(self, *args):
-        pass
+        self._update_apply_button_state(state="not applied")
 
     def _callback_sync(self):
-        pass
+        self._update_apply_button_state(state="not applied")
 
     def _callback_preview(self, recorder_index):
         if self.state["preview"]["is_on"].get():
@@ -520,13 +519,14 @@ class KinRecView(ttk.Frame):
     def _callback_start_recording(self):
         if self.state["recording"]["is_on"].get():
             # recording is in progress
+            # self._update_recording_button_state(state="waiting")
             pass
         else:
             # recording is not in progress
             name = self.state["recording"]["name"].get()
             duration = int(self.state["recording"]["duration"].get())
             delay = int(self.state["recording"]["delay"].get())
-
+            self._update_recording_button_state(state="waiting")
             # TODO add controller start recording call
 
     def _callback_select_recording(self, recording_id: int):
@@ -547,6 +547,26 @@ class KinRecView(ttk.Frame):
         messagebox.showinfo("About Demo", '\n'.join(text))
 
     # ==================================================================================================================
+
+    def _update_apply_button_state(self, state: str):
+        assert state in ["applied", "not applied", "in progress"], \
+            f'state must be in ["applied", "not applied", "in progress"], got {state}'
+        if state == "applied":
+            self.apply_params_button.configure(text="Apply", style="KinectParams_Apply.TButton")
+        elif state == "not applied":
+            self.apply_params_button.configure(text="Unsaved\nchanges.\nApply", style="KinectParams_Apply.TButton")
+        else:
+            self.apply_params_button.configure(text="In Progress", style="InProgress.TButton")
+
+    def _update_recording_button_state(self, state:str):
+        assert state in ["recording", "not recording", "waiting"], \
+            f'state must be in ["recording", "not recording", "waiting"], got {state}'
+        if state == "recording":
+            self.recording_start_button.configure(text="Stop", style="Recording_Stop.TButton")
+        elif state == "not recording":
+            self.recording_start_button.configure(text="Record!", style="Recording_Record.TButton")
+        else:
+            self.recording_start_button.configure(text="Waiting\ncontroller", style="InProgress.TButton")
 
     def _update_preview_buttons_state(self):
         preview_is_on = self.state["preview"]["is_on"].get()
