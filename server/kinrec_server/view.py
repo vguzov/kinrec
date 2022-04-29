@@ -474,6 +474,7 @@ class KinRecView(ttk.Frame):
         self.recording_status_label.configure(text="Press Record! to start recording")
         # Change button style
         self.recording_start_button.configure(text="Record!", style="Recording_Record.TButton")
+        self._controller.stop_recording()
 
     # ==================================================================================================================
 
@@ -526,8 +527,7 @@ class KinRecView(ttk.Frame):
             name = self.state["recording"]["name"].get()
             duration = int(self.state["recording"]["duration"].get())
             delay = int(self.state["recording"]["delay"].get())
-
-            # TODO add controller start recording call
+            self._controller.start_recording(name, duration, delay)
 
     def _callback_select_recording(self, recording_id: int):
         pass

@@ -2,14 +2,14 @@ from argparse import ArgumentParser
 import logging
 from kinrec_recorder.recorder import MainController
 from kinrec_recorder.net import NetHandler
+from kinrec_recorder.internal import ColoredFormatter
 
 logger = logging.getLogger("KR")
 logger.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler()
 
 stream_handler.setLevel(logging.INFO)
-stream_handler.setFormatter(logging.Formatter('%(asctime)s:%(name)s:%(levelname)s::: %(message)s',
-                                              datefmt='%H:%M:%S'))
+stream_handler.setFormatter(ColoredFormatter())
 logger.addHandler(stream_handler)
 
 ws_logger = logging.getLogger("websockets")

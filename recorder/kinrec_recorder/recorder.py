@@ -91,15 +91,15 @@ class Kinect:
         self._id = None
         self.active = False
 
-    def update_params(self, resolution=1440, wfov=False, binned=False, framerate=30, sync_mode="none"):
-        self.params = dict(resolution=resolution, wfov=wfov, binned=binned, framerate=framerate, sync_mode=sync_mode)
+    def update_params(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none"):
+        self.params = dict(resolution=resolution, wfov=wfov, binned=binned, fps=fps, sync_mode=sync_mode)
         self._color_resolution = self._color_resolutions_dict[resolution]
         self._depth_resolution = self._depth_resolutions_dict[(wfov, binned)]
 
-    def _start(self, resolution=1440, wfov=False, binned=False, framerate=30, sync_mode="none"):
+    def _start(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none"):
         if self.active:
             raise Kinect.DoubleActivationException()
-        kin = kinz.Kinect(resolution=resolution, wfov=wfov, binned=binned, framerate=framerate,  # sync_mode=sync_mode,
+        kin = kinz.Kinect(resolution=resolution, wfov=wfov, binned=binned, framerate=fps,  # sync_mode=sync_mode,
                           imu_sensors=False)
         self.device = kin
         self.active = True
@@ -183,8 +183,12 @@ class Kinect:
     @property
     def calibration_dict(self):
         def intrinsics_to_dict(calib, add_opencv=True):
-            calib_dict = {x: getattr(calib, x) for x in ['cx', 'cy', 'fx', 'fy', 'k1', 'k2', 'k3', 'k4',
-                                                         'k5', 'k6', 'p1', 'p2', 'codx', 'cody', 'width', 'height']}
+            resolution = calib.get_size()
+            intr_matrix = calib.get_intrinsics_matrix(extended=False)
+            calib_dict = {"cx":intr_matrix[0,2], "cy": intr_matrix[1,2], "fx": intr_matrix[0,0], "fy": intr_matrix[1,1],
+                          "width": resolution[0], "height": resolution[1]}
+            dist_params = calib.get_distortion_params()
+            calib_dict.update({k:dist_params[0,i] for i,k in enumerate(['k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6'])})
             if add_opencv:
                 calib_dict["opencv"] = [calib_dict[x] for x in
                                         ['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6']]
@@ -196,8 +200,8 @@ class Kinect:
         depth_calib_dict = intrinsics_to_dict(self.depth_calibration)
         color_R = self.color_calibration.get_rotation_matrix()
         depth_R = self.depth_calibration.get_rotation_matrix()
-        color_t = self.color_calibration.get_translation_vector() / 1000.
-        depth_t = self.depth_calibration.get_translation_vector() / 1000.
+        color_t = self.color_calibration.get_translation_vector()[:,0] / 1000.
+        depth_t = self.depth_calibration.get_translation_vector()[:,0] / 1000.
         color_RT = make_RT(color_R, color_t)  # color2world
         depth_RT = make_RT(depth_R, depth_t)  # depth2world
         color_RT_inv = se3_inv(color_RT)  # world2color
@@ -239,7 +243,6 @@ class RecorderThread(Thread):
                          fps=self.kinect.fps, preset="ultrafast", codec="mpeg2") as color_writer, \
                 Uint16Writer(os.path.join(self.recording_dir, "depth.mp4"), resolution=self.kinect.depth_resolution,
                              fps=self.kinect.fps, preset="ultrafast") as depth_writer:
-            self.active = True
             self.color_timestamps = []
             self.depth_timestamps = []
             self.last_times = np.zeros(self.fps_window_size)
@@ -270,6 +273,10 @@ class RecorderThread(Thread):
     @property
     def sliding_window_fps(self):
         return 1 / (self.last_times[1:] - self.last_times[:-1]).mean()
+
+    def start_recording(self):
+        self.active = True
+        self.start()
 
     def close_recording(self):
         self.active = False
@@ -346,7 +353,7 @@ class MainController:
                                    "kinect_id": self.kinect.id, "kinect_calibration": self.kinect.calibration_dict}
         self.recorder = RecorderThread(self.kinect, curr_recording_dir, recording_duration, start_delay=start_delay)
         logger.info("Starting recorder thread")
-        self.recorder.run()
+        self.recorder.start_recording()
 
     def finalize_recording(self, new_server_time=None):
         logger.info("Finalizing the recording")
@@ -365,7 +372,8 @@ class MainController:
                                                           self.recorder.depth_timestamps[0]))
         json.dump(self.recording_metadata, open(os.path.join(self.recorder.recording_dir, "metadata.json"), "w"),
                   indent=1)
-        np.savez_compressed("depth2d3dmap.npz", **{self.kinect.id: self.kinect.depth2d3dmap})
+        np.savez_compressed(os.path.join(self.recorder.recording_dir, "depth2pc_map.npz"),
+                            **{self.kinect.id: self.kinect.depth2pc_map})
         logger.info("Stopping Kinect")
         if self.recorder.exception is not None:
             logger.error(f"===Recording stopped with exception {type(self.recorder.exception)}===")
@@ -378,7 +386,7 @@ class MainController:
         self.recorder = None
 
     def get_recordings(self, with_size=True):
-        essential_files = ["metadata.json", "color.mpeg", "depth.mp4", "times.json", "depth2d3dmap.npz"]
+        essential_files = ["metadata.json", "color.mpeg", "depth.mp4", "times.json", "depth2pc_map.npz"]
         recordings_dict = {}
         for dirpath in glob(os.path.join(self.recordings_dir, "*_*")):
             if os.path.isdir(dirpath) and all(os.path.exists(os.path.join(dirpath, x)) for x in essential_files):
@@ -396,7 +404,7 @@ class MainController:
         return recordings_dict
 
     def add_recordings_sendfile_queue(self, recording_id: int):
-        files_to_transfer = ["color.mpeg", "depth.mp4", "times.json", "depth2d3dmap.npz"]
+        files_to_transfer = ["color.mpeg", "depth.mp4", "times.json", "depth2pc_map.npz"]
         recordings_dict = self.get_recordings(with_size=False)
         if recording_id not in recordings_dict:
             raise FileNotFoundError()
@@ -409,7 +417,7 @@ class MainController:
 
     def delete_recording(self, recording_id: int):
         logger.info(f"Will delete recording {recording_id}")
-        files_to_delete = ["metadata.json", "color.mpeg", "depth.mp4", "times.json", "depth2d3dmap.npz"]
+        files_to_delete = ["metadata.json", "color.mpeg", "depth.mp4", "times.json", "depth2pc_map.npz"]
         recordings_dict = self.get_recordings(with_size=False)
         if recording_id not in recordings_dict:
             raise FileNotFoundError()

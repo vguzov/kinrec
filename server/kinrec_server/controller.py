@@ -338,6 +338,7 @@ class KinRecController:
             f"Will receive a file {file_rel_path} ({file_size / 2 ** 20:.2f}MB) from recorder {recorder_id}:{kin_alias}")
 
     def comm_file_receive_update(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_curr_received: int):
+        #TODO: add view callback
         pass
 
     def comm_file_receive_end(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_size: int,
