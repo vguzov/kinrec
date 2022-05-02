@@ -139,6 +139,7 @@ class KinRecView(ttk.Frame):
         # Subframe with records list and scrollbar
         # subframe creation
         browser_records_subframe = FocusLabelFrame(self.browser_frame, text="List")
+        self.browser_records_subframe = browser_records_subframe
         browser_records_subframe.grid_rowconfigure(0, weight=1)
         browser_records_subframe.grid_columnconfigure(0, weight=1)
         browser_records_subframe.grid_propagate(False)
@@ -165,16 +166,16 @@ class KinRecView(ttk.Frame):
             label.grid(row=0, column=index, padx=2, sticky='news')
         self.browser_records_database[-1] = header
         # scrollbar
-        records_scrollbar = tk.Scrollbar(
+        self.browser_records_scrollbar = tk.Scrollbar(
             browser_records_subframe, orient="vertical", command=browser_records_canvas.yview
         )
-        records_scrollbar.grid(row=0, column=1, sticky='ns')
-        browser_records_canvas.configure(yscrollcommand=records_scrollbar.set)
+        self.browser_records_scrollbar.grid(row=0, column=1, sticky='ns')
+        browser_records_canvas.configure(yscrollcommand=self.browser_records_scrollbar.set)
         # resize canvas to fit everything
         self.browser_records_subsubframe.update_idletasks()
         _width = 1.3 * sum([header[j].winfo_width() for j in range(len(header))])
         _height = 10 * header[0].winfo_height()
-        browser_records_subframe.config(width=_width + records_scrollbar.winfo_width(), height=_height)
+        browser_records_subframe.config(width=_width + self.browser_records_scrollbar.winfo_width(), height=_height)
         browser_records_canvas.config(scrollregion=browser_records_canvas.bbox("all"))
 
         # Subframe with download button and progressbar
@@ -296,7 +297,7 @@ class KinRecView(ttk.Frame):
                              command=partial(self._callback_select_recording, id),
                              variable=self.state["recordings_list"]["checkboxes"][id]),
             tk.Label(self.browser_records_subsubframe, text=f"{date_str}"),
-            tk.Label(self.browser_records_subsubframe, text="Name"),
+            tk.Label(self.browser_records_subsubframe, text=f"{entry.name}"),
             tk.Label(self.browser_records_subsubframe, text=f"{time_str}"),
             tk.Label(self.browser_records_subsubframe, text=f"{params_str}"),
             tk.Label(self.browser_records_subsubframe, text=f"{entry.size:06.1f}"),
@@ -447,11 +448,19 @@ class KinRecView(ttk.Frame):
         self._controller.stop_recording()
 
     def browse_recordings_reply(self, recordings_database: Dict[int, RecordsEntry]):
+        max_width = -1
+
         for index, (recording_id, recording) in enumerate(recordings_database.items()):
             row = self.add_records_browser_row(recording_id, recording)
+            width = 0
             for column, widget in enumerate(row):
-                widget.grid(row=index, column=column, padx=2, sticky='news')
+                widget.grid(row=index+1, column=column, padx=2, sticky='news')
+                width += widget.winfo_width()
+            max_width = max(max_width, 1.1 * width)
             self.browser_records_database[recording_id] = row
+
+        # adjust width
+        self.browser_records_subframe.config(width=max_width + self.records_scrollbar.winfo_width())
     # ==================================================================================================================
 
     # ================================================ Button callbacks ================================================
