@@ -70,6 +70,8 @@ class RecorderComm:
         self._last_state = RecorderState()
         self._till_full_status_update = 0
         self._full_status_update_step = full_status_update_step
+        self._full_status_update_requested = False
+        self._last_status_reply_received = True
 
     def _register_callbacks(self, controller):
         callbacks_list = []
@@ -112,6 +114,7 @@ class RecorderComm:
             await self.close()
             return
         if isinstance(msg, str):
+            logger.debug(f"INCOMING MESSAGE: {msg}")
             msg = json.loads(msg)
             if 'cmd_report' in msg:
                 cmd_report = msg['cmd_report']
@@ -250,13 +253,21 @@ class RecorderComm:
         await self._send({"type": "get_kinect_calibration"})
 
     async def get_status(self, full_update=False):
-        if self._till_full_status_update <= 0 or full_update:
+        if self._till_full_status_update <= 0:
+            full_update = True
+            self._till_full_status_update = self._full_status_update_step
+        else:
+            self._till_full_status_update -= 1
+        self._full_status_update_requested = self._full_status_update_requested or full_update
+        if self._full_status_update_requested:
             optionals = ["disk_space", "battery", "recording_fps"]
             self._till_full_status_update = self._full_status_update_step
         else:
             optionals = []
-            self._till_full_status_update -= 1
-        await self._send({"type": "get_status", "optionals": optionals})
+        if self._last_status_reply_received:
+            await self._send({"type": "get_status", "optionals": optionals})
+            self._full_status_update_requested = False
+            self._last_status_reply_received = False
 
     async def start_preview(self):
         await self._send({"type": "start_preview"})
@@ -327,6 +338,7 @@ class RecorderComm:
                 self._last_state.bat_power = int(msg["optionals"]["battery"]["percent"])
         if "disk_space" in msg["optionals"]:
             self._last_state.free_space = int(msg["optionals"]["disk_space"]["free"] / 2 ** 30)
+        self._last_status_reply_received = True
         self.controller_callbacks.get_status_reply(True, self._last_state)
 
     def _process_calibration_msg(self, msg):
@@ -343,7 +355,8 @@ class RecorderComm:
         else:
             self.controller_callbacks.get_kinect_calibration_reply(False, None, None, info=cmd_info)
 
-    def _decode_image(self, data, format="jpeg"):
+    @staticmethod
+    def _decode_image(data, format="jpeg"):
         data = base64.b64decode(data.encode("utf-8"))
         img = np.array(Image.open(BytesIO(data), formats=[format]))
         return img

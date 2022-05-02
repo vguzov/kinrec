@@ -5,9 +5,9 @@ from kinrec_server.app import KinRecApp
 from kinrec_server.internal import ColoredFormatter
 
 logger = logging.getLogger("KRS")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.INFO)
+stream_handler.setLevel(logging.DEBUG)
 stream_handler.setFormatter(ColoredFormatter())
 logger.addHandler(stream_handler)
 

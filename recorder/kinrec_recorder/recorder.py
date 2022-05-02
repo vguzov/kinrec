@@ -246,11 +246,12 @@ class RecorderThread(Thread):
             self.color_timestamps = []
             self.depth_timestamps = []
             self.last_times = np.zeros(self.fps_window_size)
-            stime = time.time()
-            self.last_times[-1] = stime
             if self.start_delay > 0:
                 logger.info(f"Waiting for {self.start_delay:.2f} seconds before starting")
                 time.sleep(self.start_delay)
+            stime = time.time()
+            self.last_times[-1] = stime
+            logger.info("Recording started")
             while self.active:
                 try:
                     color, depth, color_ts, depth_ts = self.kinect.get_next_frame()

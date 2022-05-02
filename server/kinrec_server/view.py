@@ -289,7 +289,7 @@ class KinRecView(ttk.Frame):
 
         date_str = datetime.fromtimestamp(entry.date).strftime("%d.%m.%Y, %H:%M")
         time_str = timedelta(seconds=entry.length)
-        params_str = "\n".join([f"{k}: {v}" for k, v in entry.params.items()])
+        params_str = "\n".join([f"{k}: {v}" for k, v in entry.params.to_dict().items()])
         row = [
             FocusCheckButton(self.browser_records_subsubframe, text="",
                              command=partial(self._callback_select_recording, entry.id),
@@ -462,6 +462,7 @@ class KinRecView(ttk.Frame):
             self.state["recordings_list"]["is_on"].set(True)
             self.browser_frame.grid()
             self.recording_browse_button.configure(text="Close\nbrowser")
+            self._controller.collect_recordings_info()
 
     def _callback_rgb_res(self, *args):
         self._update_apply_button_state(state="not applied")

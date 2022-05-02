@@ -12,7 +12,8 @@ from PIL import Image
 from collections import defaultdict
 from .recorder_communication import RecorderComm
 from typing import Dict, Optional, Union, Sequence, Mapping, List
-from .internal import RecorderState, KinectParams, KinectNotReadyException, RecorderDisconnectedException, RecordsEntry
+from .internal import RecorderState, KinectParams, KinectNotReadyException, RecorderDisconnectedException, RecordsEntry, \
+    KinectCalibration
 from .view import KinRecView
 
 logger = logging.getLogger("KRS.controller")
@@ -110,8 +111,34 @@ class KinRecController:
         self._curr_recording_stopped_ids = None
 
     def _compile_recordings_list(self, recorderwise_reclists: Dict[int, dict]):
-        # TODO: complete the list compilation
-        pass
+        recordings_completeness_tracker = {}
+        self._recordings_database = {}
+        for recorder_id, recordings_dict in recorderwise_reclists.items():
+            for recording_id, recording_info in recordings_dict.items():
+                recording_id = int(recording_id)
+                if recording_id not in self._recordings_database:
+                    recording = RecordsEntry.from_dict(recording_info)
+                    recordings_completeness_tracker[recording_id] = recording_info["participating_kinects"]
+                    self._recordings_database[recording_id] = recording
+                else:
+                    recording = self._recordings_database[recording_id]
+                kinect_id = recording_info["kinect_id"]
+                if kinect_id not in recordings_completeness_tracker[recording_id]:
+                    logger.error("Kinect ID is not in the participating kinects")
+                else:
+                    if recording.params.sync and recording_info["kinect_calibration"]["params"][
+                        "sync_mode"] == "master":
+                        recording.params.sync_master_id = kinect_id
+                    recordings_completeness_tracker[recording_id].remove(kinect_id)
+                    recording.participating_kinects[kinect_id] = \
+                        KinectCalibration.from_dict(recording_info["kinect_calibration"])
+        for recording_id, recording in self._recordings_database.items():
+            if len(recordings_completeness_tracker[recording_id]) == 0:
+                recording.status = "Consistent"
+            else:
+                recording.status = "Inconsistent (missing " + ", ".join(
+                    recordings_completeness_tracker[recording_id]) + ")"
+            self._view.add_records_browser_row(recording)
 
     async def _collect_recordings(self, recordings_to_collect):
         routines = []
@@ -304,12 +331,14 @@ class KinRecController:
         if all(completed_replies):
             self._compile_recordings_list(self._recorder_reclist_responses)
 
-    def comm_collect_reply(self, recorder_id: int, reply_result: bool, recording_id: int, files: List[str], info: str = None):
+    def comm_collect_reply(self, recorder_id: int, reply_result: bool, recording_id: int, files: List[str],
+            info: str = None):
         if not reply_result:
             kin_alias = self.kinect_alias(recorder_id)
-            logger.error(f"Recorder {recorder_id}:{kin_alias} failed to acquire recording {recording_id}, more info: {info}")
+            logger.error(
+                f"Recorder {recorder_id}:{kin_alias} failed to acquire recording {recording_id}, more info: {info}")
         else:
-            self._files_to_collect[recorder_id]+=files
+            self._files_to_collect[recorder_id] += files
             logger.info(f"Will collect {len(files)} for recording {recording_id}")
 
     def comm_delete_recording_reply(self, recorder_id: int, reply_result: bool, info: str = None):
@@ -338,7 +367,7 @@ class KinRecController:
             f"Will receive a file {file_rel_path} ({file_size / 2 ** 20:.2f}MB) from recorder {recorder_id}:{kin_alias}")
 
     def comm_file_receive_update(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_curr_received: int):
-        #TODO: add view callback
+        # TODO: add view callback
         pass
 
     def comm_file_receive_end(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_size: int,
