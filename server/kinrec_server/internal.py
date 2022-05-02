@@ -124,9 +124,6 @@ class KinectCalibration:
         return calib_dict
 
 
-
-
-
 @dataclass
 class RecordsEntry:
     id: int = 0  # unique id, currently: timestamp of server time of the recording start

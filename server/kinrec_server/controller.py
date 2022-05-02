@@ -138,7 +138,8 @@ class KinRecController:
             else:
                 recording.status = "Inconsistent (missing " + ", ".join(
                     recordings_completeness_tracker[recording_id]) + ")"
-            self._view.add_records_browser_row(recording)
+
+        self._view.browse_recordings_reply(self._recordings_database)
 
     async def _collect_recordings(self, recordings_to_collect):
         routines = []

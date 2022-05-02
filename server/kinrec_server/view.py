@@ -1,6 +1,7 @@
 from functools import partial
 import logging
 from datetime import datetime, timedelta
+from typing import Dict
 
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
@@ -150,7 +151,7 @@ class KinRecView(ttk.Frame):
         browser_records_canvas.create_window((0, 0), window=self.browser_records_subsubframe, anchor='nw')
         # browser_records_subsubframe.grid(row=0, column=0)
         # header for records list in subsubframe
-        self.records_list = []
+        self.browser_records_database = dict()
         header = [
             tk.Label(self.browser_records_subsubframe, text="Collect?"),
             tk.Label(self.browser_records_subsubframe, text="Date"),
@@ -162,7 +163,7 @@ class KinRecView(ttk.Frame):
         ]
         for index, label in enumerate(header):
             label.grid(row=0, column=index, padx=2, sticky='news')
-        self.records_list.append(header)
+        self.browser_records_database[-1] = header
         # scrollbar
         records_scrollbar = tk.Scrollbar(
             browser_records_subframe, orient="vertical", command=browser_records_canvas.yview
@@ -283,17 +284,17 @@ class KinRecView(ttk.Frame):
 
             self.update_recorder_state(recorder_index, self._recorders[recorder_index]["state"])
 
-    def add_records_browser_row(self, entry: RecordsEntry):
+    def add_records_browser_row(self, id: int, entry: RecordsEntry):
         # create variable for checkbox
-        self.state["recordings_list"]["checkboxes"][entry.id] = tk.BooleanVar(value=False)
+        self.state["recordings_list"]["checkboxes"][id] = tk.BooleanVar(value=False)
 
         date_str = datetime.fromtimestamp(entry.date).strftime("%d.%m.%Y, %H:%M")
         time_str = timedelta(seconds=entry.length)
         params_str = "\n".join([f"{k}: {v}" for k, v in entry.params.to_dict().items()])
         row = [
             FocusCheckButton(self.browser_records_subsubframe, text="",
-                             command=partial(self._callback_select_recording, entry.id),
-                             variable=self.state["recordings_list"]["checkboxes"][entry.id]),
+                             command=partial(self._callback_select_recording, id),
+                             variable=self.state["recordings_list"]["checkboxes"][id]),
             tk.Label(self.browser_records_subsubframe, text=f"{date_str}"),
             tk.Label(self.browser_records_subsubframe, text="Name"),
             tk.Label(self.browser_records_subsubframe, text=f"{time_str}"),
@@ -444,6 +445,13 @@ class KinRecView(ttk.Frame):
         # Change button style
         self._update_recording_button_state(state="not recording")
         self._controller.stop_recording()
+
+    def browse_recordings_reply(self, recordings_database: Dict[int, RecordsEntry]):
+        for index, (recording_id, recording) in enumerate(recordings_database.items()):
+            row = self.add_records_browser_row(recording_id, recording)
+            for column, widget in enumerate(row):
+                widget.grid(row=index, column=column, padx=2, sticky='news')
+            self.browser_records_database[recording_id] = row
     # ==================================================================================================================
 
     # ================================================ Button callbacks ================================================
@@ -458,10 +466,18 @@ class KinRecView(ttk.Frame):
             self.state["recordings_list"]["is_on"].set(False)
             self.browser_frame.grid_remove()
             self.recording_browse_button.configure(text="Browse\nrecordings")
+            # cleaning of old database
+            for recording_id, row in self.browser_records_database.items():
+                # except for header
+                if recording_id != -1:
+                    for widget in row:
+                        widget.destroy()
+            self.state["recordings_list"]["checkboxes"] = {}
         else:
             self.state["recordings_list"]["is_on"].set(True)
             self.browser_frame.grid()
             self.recording_browse_button.configure(text="Close\nbrowser")
+            # TODO move to a separate button
             self._controller.collect_recordings_info()
 
     def _callback_rgb_res(self, *args):
@@ -502,7 +518,11 @@ class KinRecView(ttk.Frame):
         pass
 
     def _callback_records_collect(self):
-        pass
+        recording_ids_to_collect = []
+        for recording_id, variable in self.state["recordings_list"]["checkboxes"].items():
+            if variable.get():
+                recording_ids_to_collect.append(recording_id)
+        # TODO add controller collect records call
 
     def _callback_about(self):
         self.menubar.focus_set()
