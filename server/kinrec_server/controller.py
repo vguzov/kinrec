@@ -4,6 +4,7 @@ import numpy as np
 import logging
 import os
 import time
+import json
 import websockets
 # import cv2
 import matplotlib.cm
@@ -20,9 +21,11 @@ logger = logging.getLogger("KRS.controller")
 
 
 class KinRecController:
-    def __init__(self, kinect_alias_mapping: Dict[Optional[str], Optional[int]] = None, preview_fps=10.):
+    def __init__(self, kinect_alias_mapping: Dict[Optional[str], Optional[int]] = None, preview_fps=10.,
+            workdir='./kinrec'):
         if kinect_alias_mapping is None:
             kinect_alias_mapping = defaultdict(lambda: None)
+        self._workdir = workdir
         self._kinect_id_mapping: Dict[Optional[str], Optional[int]] = kinect_alias_mapping
         self._view: Optional[KinRecView] = None
         self._connected_recorders: Dict[int, RecorderComm] = {}
@@ -36,12 +39,14 @@ class KinRecController:
         self._params_applied_responses = {}
         self._recordings_database: Dict[int, RecordsEntry] = {}
         self._recorder_reclist_responses = {}
+        self._sync_capture_delay = 160  # in nanoseconds
         self._master_recorder = None
         self._curr_recording_participating_kinects = None
         self._curr_recording_started_ids: Optional[set] = None
         self._curr_recording_stopped_ids: Optional[set] = None
         self._curr_state = "idle"
         self._files_to_collect: Dict[int, List[str]] = defaultdict(list)
+        self._recordings_received_size: Dict[int, int] = {}
 
     def kinect_alias(self, recorder_id: int) -> Optional[int]:
         return self._kinect_id_mapping[self._connected_recorders[recorder_id].kinect_id]
@@ -67,10 +72,12 @@ class KinRecController:
     async def _apply_last_kinect_params(self):
         kinect_params = self._last_kinect_params
         recorder_ids = sorted(self._connected_recorders.keys())
+        recorder_sync_delays = self._sync_capture_delay * np.arange(len(recorder_ids))
         routines = []
         if len(recorder_ids) > 0:
             master_recorder = recorder_ids[0]
             for recorder_id, recorder in self._connected_recorders.items():
+                recorder_sync_delay = recorder_sync_delays[recorder_id]
                 sync_mode = "none"
                 if kinect_params.sync:
                     if recorder_id == master_recorder:
@@ -80,7 +87,7 @@ class KinRecController:
                 self._params_applied_responses[recorder_id] = None
                 routines.append(recorder.set_kinect_params(kinect_params.rgb_res, kinect_params.depth_wfov,
                                                            kinect_params.depth_binned,
-                                                           kinect_params.fps, sync_mode))
+                                                           kinect_params.fps, sync_mode, recorder_sync_delay))
             await asyncio.gather(*routines)
             return master_recorder if kinect_params.sync else None
         else:
@@ -122,6 +129,7 @@ class KinRecController:
                     self._recordings_database[recording_id] = recording
                 else:
                     recording = self._recordings_database[recording_id]
+                    recording.size += recording_info["size"]
                 kinect_id = recording_info["kinect_id"]
                 if kinect_id not in recordings_completeness_tracker[recording_id]:
                     logger.error("Kinect ID is not in the participating kinects")
@@ -141,18 +149,29 @@ class KinRecController:
 
         self._view.browse_recordings_reply(self._recordings_database)
 
+    @staticmethod
+    def get_recording_dirname(recording_id, recording_name):
+        return f"{recording_id}_{recording_name}"
+
     async def _collect_recordings(self, recordings_to_collect):
         routines = []
+        rec_folders = ["color", "depth", "times", "depth2pc_maps"]
         for rec_id in recordings_to_collect:
             logger.info(f"Collecting recording {rec_id}")
             recording = self._recordings_database[rec_id]
+            self._recordings_received_size[rec_id] = 0
             participating_kinects = set(recording.participating_kinects)
             curr_routines = []
             ready_kinects = set()
+            rec_path = os.path.join(self._workdir, "recordings", self.get_recording_dirname(rec_id, recording.name))
+            for rec_folder in rec_folders:
+                os.makedirs(os.path.join(rec_path, rec_folder), exist_ok=True)
+            json.dump(recording.to_dict(), open(os.path.join(rec_path, "metadata.json"), "w"), indent=2)
             self._curr_collection_participating_recorders = []
             for recorder_id, recorder in self._connected_recorders.items():
                 if recorder.kinect_id in participating_kinects:
-                    curr_routines.append(recorder.collect(rec_id))
+                    curr_routines.append(
+                        recorder.collect(rec_id, rec_path))
                     ready_kinects.add(recorder.kinect_id)
             if ready_kinects == participating_kinects:
                 routines += curr_routines
@@ -219,7 +238,7 @@ class KinRecController:
         await recorder.get_kinect_calibration()
         current_params = self._last_kinect_params
         await recorder.set_kinect_params(current_params.rgb_res, current_params.depth_wfov,
-                                         current_params.depth_binned, current_params.fps, "none")
+                                         current_params.depth_binned, current_params.fps, "none", 0)
 
     def remove_recorder(self, recorder_id):
         del self._connected_recorders[recorder_id]
@@ -302,10 +321,9 @@ class KinRecController:
             kin_alias = self.kinect_alias(recorder_id)
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Recording failed to start, more info: {info}")
             self.stop_recording()
-            # TODO: add view callback to fail recording start
+            self._view.start_recording_reply(False)
         if self._curr_recording_started_ids == self._curr_recording_participating_kinects:
-            # TODO: add view callback to finalize recording start
-            pass
+            self._view.start_recording_reply(True)
 
     def comm_stop_recording_reply(self, recorder_id: int, reply_result: bool, info: str = None):
         if reply_result:
@@ -364,12 +382,16 @@ class KinRecController:
 
     def comm_file_receive_start(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_size: int):
         kin_alias = self.kinect_alias(recorder_id)
-        logger.info(
+        logger.debug(
             f"Will receive a file {file_rel_path} ({file_size / 2 ** 20:.2f}MB) from recorder {recorder_id}:{kin_alias}")
 
-    def comm_file_receive_update(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_curr_received: int):
+    def comm_file_receive_update(self, recorder_id: int, file_rec_id: int, file_rel_path: str, size_curr_received: int,
+            size_already_received: int):
+        self._recordings_received_size[file_rec_id] += size_curr_received
+        received_percent = self._recordings_received_size[file_rec_id]/self._recordings_database[file_rec_id].size*100
+        logger.debug(f"Recording {file_rec_id}: received {self._recordings_received_size[file_rec_id]/2**20:.2f}MB/"
+                     f"{self._recordings_database[file_rec_id].size/2**20:.2f}MB ({received_percent:.1f}%)")
         # TODO: add view callback
-        pass
 
     def comm_file_receive_end(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_size: int,
             file_received: int):

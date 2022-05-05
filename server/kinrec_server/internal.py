@@ -84,11 +84,11 @@ class CameraIntrinsics:
 
     @classmethod
     def from_dict(cls, intr_dict: dict):
-        params = {k:v for k,v in intr_dict.items() if k in cls._param_names}
+        params = {k: v for k, v in intr_dict.items() if k in cls._param_names}
         return cls(**params)
 
-    def to_dict(self, with_opencv:bool=True) -> dict:
-        intr_dict = {k:getattr(self, k) for k in self._param_names}
+    def to_dict(self, with_opencv: bool = True) -> dict:
+        intr_dict = {k: getattr(self, k) for k in self._param_names}
         if with_opencv:
             intr_dict["opencv"] = [intr_dict[x] for x in self._opencv_param_names]
         return intr_dict
@@ -145,6 +145,12 @@ class RecordsEntry:
                         participating_kinects={x: None for x in recording_info["participating_kinects"]})
         return recording
 
+    def to_dict(self):
+        entry_dict = {"id": self.id, "name": self.name, "server_time": self.date, "duration": self.length,
+                      "size": self.size, "status": self.status, "params": self.params.to_dict(),
+                      "participating_kinects": {k: v.to_dict() for k, v in self.participating_kinects.items()}}
+        return entry_dict
+
 
 # Exceptions
 class KinectNotReadyException(Exception):
@@ -161,11 +167,12 @@ class ColoredFormatter(logging.Formatter):
     yellow = "\x1b[33;20m"
     red = "\x1b[31;20m"
     bold_red = "\x1b[31;1m"
+    dark_grey = "\x1b[30;1m"
     reset = "\x1b[0m"
     format = '%(asctime)s:%(name)s:%(levelname)s::: %(message)s'
 
     FORMATS = {
-        logging.DEBUG: grey + format + reset,
+        logging.DEBUG: dark_grey + format + reset,
         logging.INFO: grey + format + reset,
         logging.WARNING: yellow + format + reset,
         logging.ERROR: red + format + reset,

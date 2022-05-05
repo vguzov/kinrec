@@ -190,7 +190,23 @@ class RecorderComm:
                                                         f"Cannot receive more than one file at once")
                     rec_id = msg["recording_id"]
                     rec_path = self._recording_paths[rec_id]
-                    self._current_file_rel_path = msg["relative_file_path"]
+                    typename, file_ext = os.path.basename(msg["relative_file_path"]).split(".")[-2:]
+                    download_folder = ""
+                    if "color" in typename:
+                        download_folder = "color"
+                    elif "depth2pc" in typename:
+                        download_folder = "depth2pc_maps"
+                    elif "depth" in typename:
+                        download_folder = "depth"
+                    elif "time" in typename:
+                        download_folder = "times"
+
+                    if self.kinect_alias is None:
+                        filename = f"_{self.kinect_id}.{file_ext}"
+                    else:
+                        filename = f"{self.kinect_alias}_{self.kinect_id}.{file_ext}"
+
+                    self._current_file_rel_path = os.path.join(download_folder, filename)
                     self._current_file_rec_id = rec_id
                     file_path = os.path.join(rec_path, self._current_file_rel_path)
                     self._current_file_size = msg["file_size"]
@@ -213,6 +229,7 @@ class RecorderComm:
                 self._current_file_received += len(msg)
                 self.controller_callbacks.file_receive_update(self._current_file_rec_id,
                                                               self._current_file_rel_path,
+                                                              len(msg),
                                                               self._current_file_received)
 
     def _file_collect_end(self):
@@ -245,9 +262,14 @@ class RecorderComm:
     def kinect_id(self) -> str:
         return self._kinect_id
 
-    async def set_kinect_params(self, rgb_res, depth_wfov, depth_binned, fps, sync_mode):
-        await self._send({"type": "set_kinect_params", "rgb_res": rgb_res, 'depth_wfov': depth_wfov,
-                          'depth_binned': depth_binned, 'fps': fps, 'sync_mode': sync_mode})
+    @property
+    def kinect_alias(self) -> int:
+        return self._last_state.kinect_alias
+
+    async def set_kinect_params(self, rgb_res, depth_wfov, depth_binned, fps, sync_mode, sync_capture_delay):
+        await self._send({"type": "set_kinect_params", "rgb_res": int(rgb_res), 'depth_wfov': bool(depth_wfov),
+                          'depth_binned': bool(depth_binned), 'fps': int(fps), 'sync_mode': sync_mode,
+                          'sync_capture_delay': int(sync_capture_delay)})
 
     async def get_kinect_calibration(self):
         await self._send({"type": "get_kinect_calibration"})
@@ -290,7 +312,8 @@ class RecorderComm:
     async def get_recordings_list(self):
         await self._send({"type": "get_recordings_list"})
 
-    async def collect(self, recording_id):
+    async def collect(self, recording_id, recording_path):
+        self._recording_paths[recording_id] = recording_path
         await self._send({"type": "collect", "recording_id": recording_id})
 
     async def delete_recording(self, recording_id):

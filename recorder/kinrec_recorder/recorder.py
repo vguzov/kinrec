@@ -91,16 +91,17 @@ class Kinect:
         self._id = None
         self.active = False
 
-    def update_params(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none"):
-        self.params = dict(resolution=resolution, wfov=wfov, binned=binned, fps=fps, sync_mode=sync_mode)
+    def update_params(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none", sync_capture_delay=0):
+        self.params = dict(resolution=resolution, wfov=wfov, binned=binned, fps=fps, sync_mode=sync_mode,
+                           sync_capture_delay=sync_capture_delay)
         self._color_resolution = self._color_resolutions_dict[resolution]
         self._depth_resolution = self._depth_resolutions_dict[(wfov, binned)]
 
-    def _start(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none"):
+    def _start(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none", sync_capture_delay=0):
         if self.active:
             raise Kinect.DoubleActivationException()
-        kin = kinz.Kinect(resolution=resolution, wfov=wfov, binned=binned, framerate=fps,  # sync_mode=sync_mode,
-                          imu_sensors=False)
+        kin = kinz.Kinect(resolution=resolution, wfov=wfov, binned=binned, framerate=fps, sync_mode=sync_mode,
+                          sync_capture_delay=sync_capture_delay, imu_sensors=False)
         self.device = kin
         self.active = True
         logger.info("Kinect initialized, getting frame to test")
@@ -185,10 +186,12 @@ class Kinect:
         def intrinsics_to_dict(calib, add_opencv=True):
             resolution = calib.get_size()
             intr_matrix = calib.get_intrinsics_matrix(extended=False)
-            calib_dict = {"cx":intr_matrix[0,2], "cy": intr_matrix[1,2], "fx": intr_matrix[0,0], "fy": intr_matrix[1,1],
+            calib_dict = {"cx": intr_matrix[0, 2], "cy": intr_matrix[1, 2], "fx": intr_matrix[0, 0],
+                          "fy": intr_matrix[1, 1],
                           "width": resolution[0], "height": resolution[1]}
             dist_params = calib.get_distortion_params()
-            calib_dict.update({k:dist_params[0,i] for i,k in enumerate(['k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6'])})
+            calib_dict.update(
+                {k: dist_params[0, i] for i, k in enumerate(['k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6'])})
             if add_opencv:
                 calib_dict["opencv"] = [calib_dict[x] for x in
                                         ['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6']]
@@ -200,8 +203,8 @@ class Kinect:
         depth_calib_dict = intrinsics_to_dict(self.depth_calibration)
         color_R = self.color_calibration.get_rotation_matrix()
         depth_R = self.depth_calibration.get_rotation_matrix()
-        color_t = self.color_calibration.get_translation_vector()[:,0] / 1000.
-        depth_t = self.depth_calibration.get_translation_vector()[:,0] / 1000.
+        color_t = self.color_calibration.get_translation_vector()[:, 0] / 1000.
+        depth_t = self.depth_calibration.get_translation_vector()[:, 0] / 1000.
         color_RT = make_RT(color_R, color_t)  # color2world
         depth_RT = make_RT(depth_R, depth_t)  # depth2world
         color_RT_inv = se3_inv(color_RT)  # world2color
@@ -409,7 +412,7 @@ class MainController:
         recordings_dict = self.get_recordings(with_size=False)
         if recording_id not in recordings_dict:
             raise FileNotFoundError()
-        recording_name = recordings_dict[recording_id]
+        recording_name = recordings_dict[recording_id]["name"]
         dirpath = os.path.join(self.recordings_dir, self.get_recording_dirname(recording_id, recording_name))
         for filename in files_to_transfer:
             filepath = os.path.join(dirpath, filename)
@@ -585,7 +588,7 @@ class MainController:
                                    "kinect_calibration": calibration_dict, "kinect_id": self.kinect.id})
             elif msgt == "set_kinect_params":
                 self.kinect.update_params(msg["rgb_res"], msg["depth_wfov"], msg["depth_binned"],
-                                          msg["fps"], msg["sync_mode"])
+                                          msg["fps"], msg["sync_mode"], msg["sync_capture_delay"])
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
             elif msgt == "get_status":
                 info = ""

@@ -173,7 +173,8 @@ class KinRecView(ttk.Frame):
         browser_records_canvas.configure(yscrollcommand=self.browser_records_scrollbar.set)
         # resize canvas to fit everything
         self.browser_records_subsubframe.update_idletasks()
-        _width = 1.3 * sum([header[j].winfo_width() for j in range(len(header))])
+        # _width = 1.3 * sum([header[j].winfo_width() for j in range(len(header))])
+        _width = 2.5 * sum([header[j].winfo_width() for j in range(len(header))])
         _height = 10 * header[0].winfo_height()
         browser_records_subframe.config(width=_width + self.browser_records_scrollbar.winfo_width(), height=_height)
         browser_records_canvas.config(scrollregion=browser_records_canvas.bbox("all"))
@@ -427,7 +428,7 @@ class KinRecView(ttk.Frame):
         self._params_kinect = params
         self._update_kinect_params_view(params)
 
-    def start_recording_reply(self):
+    def start_recording_reply(self, is_successful = True):
         # TODO add timer
         # Change internal flag
         self.state["recording"]["is_on"].set(value=True)
@@ -460,7 +461,7 @@ class KinRecView(ttk.Frame):
             self.browser_records_database[recording_id] = row
 
         # adjust width
-        self.browser_records_subframe.config(width=max_width + self.records_scrollbar.winfo_width())
+        # self.browser_records_subframe.config(width=max_width + self.browser_records_scrollbar.winfo_width())
     # ==================================================================================================================
 
     # ================================================ Button callbacks ================================================
@@ -531,7 +532,7 @@ class KinRecView(ttk.Frame):
         for recording_id, variable in self.state["recordings_list"]["checkboxes"].items():
             if variable.get():
                 recording_ids_to_collect.append(recording_id)
-        # TODO add controller collect records call
+        self._controller.collect_recordings(recording_ids_to_collect)
 
     def _callback_about(self):
         self.menubar.focus_set()
