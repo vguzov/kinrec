@@ -9,6 +9,7 @@ dependencies:
   - ffmpeg
   - x264
   - scikit-image
+  - pip
   - pip:
       - git+https://github.com/vguzov/videoio.git@codecs
       - git+https://github.com/vguzov/KinZ-Python.git@kinect_addons
