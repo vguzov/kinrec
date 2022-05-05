@@ -8,19 +8,18 @@ class ColoredFormatter(logging.Formatter):
     red = "\x1b[31;20m"
     bold_red = "\x1b[31;1m"
     reset = "\x1b[0m"
-    format = '%(asctime)s:%(name)s:%(levelname)s::: %(message)s'
 
     FORMATS = {
-        logging.DEBUG: grey + format + reset,
-        logging.INFO: grey + format + reset,
-        logging.WARNING: yellow + format + reset,
-        logging.ERROR: red + format + reset,
-        logging.CRITICAL: bold_red + format + reset
+        logging.DEBUG: grey + "{fmt}" + reset,
+        logging.INFO: grey + "{fmt}" + reset,
+        logging.WARNING: yellow + "{fmt}" + reset,
+        logging.ERROR: red + "{fmt}" + reset,
+        logging.CRITICAL: bold_red + "{fmt}" + reset
     }
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._formatters = {level: logging.Formatter(log_fmt, datefmt='%H:%M:%S') for level, log_fmt in
+    def __init__(self, fmt=None, datefmt=None, style='%'):
+        super().__init__(fmt=fmt, datefmt=datefmt, style=style)
+        self._formatters = {level: logging.Formatter(log_fmt.format(fmt=fmt), datefmt=datefmt) for level, log_fmt in
                        self.FORMATS.items()}
 
     def format(self, record):
