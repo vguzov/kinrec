@@ -35,7 +35,7 @@ if __name__ == "__main__":
 
     if args.logfile is not None:
         os.makedirs(os.path.dirname(args.logfile), exist_ok=True)
-        file_handler = RotatingFileHandler(args.logfile, maxBytes=int(args.logfile_maxsize * 2 ** 20),
+        file_handler = RotatingFileHandler(args.logfile, mode='a', maxBytes=int(args.logfile_maxsize * 2 ** 20),
                                           backupCount=args.logfile_backups)
         file_formatter = logging.Formatter(fmt='%(asctime)s:%(name)s:%(levelname)s::: %(message)s', datefmt='%H:%M:%S')
         file_handler.setFormatter(file_formatter)
