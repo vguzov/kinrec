@@ -28,7 +28,7 @@ if __name__ == "__main__":
                         help="Folder where all the recordings are stored")
     parser.add_argument("--logfile", default=None)
     parser.add_argument("--logfile_maxsize", type=float, default=20., help="logfile maxsize (in MB)")
-    parser.add_argument("--logfile_backups", type=int, default=1, help="logfile backup count")
+    parser.add_argument("--logfile_backups", type=int, default=2, help="logfile backup count")
     parser.add_argument("-s", "--server", default="192.168.1.40:4400", help="Server address and port")
 
     args = parser.parse_args()
