@@ -1,3 +1,5 @@
+import time
+
 import websockets
 import asyncio
 import logging
@@ -109,23 +111,30 @@ class NetHandler:
                 self._in_queue.put(msg)
 
     async def _loop(self):
-        try:
-            logger.info("Trying to connect WS")
-            self._websocket = await websockets.connect("ws://" + self.serveraddr)
-        except Exception as e:
-            logger.error(f"Failed to connect to {self.serveraddr}: {e}")
-            self._in_queue.put(e)
-        else:
-            self._is_active = True
-            self._stop_event = asyncio.Event()
-            logger.info(f"Connected to {self.serveraddr} successfully")
-            self._in_queue.put(self.ConnectedEvent())
-            logger.info("Starting the handler loop")
-            asyncio.create_task(self._in_queue_handler())
-            asyncio.create_task(self._out_queue_handler())
-            await self._stop_event.wait()
-            logger.info("Waiting for WS to close")
-            await self._websocket.close()
+        connected = False
+        while not connected:
+            try:
+                logger.info("Trying to connect WS")
+                self._websocket = await websockets.connect("ws://" + self.serveraddr)
+            except ConnectionRefusedError as e:
+                logger.info("Connection refused, trying again")
+                time.sleep(2)
+            except Exception as e:
+                logger.error(f"Failed to connect to {self.serveraddr}: {e}")
+                self._in_queue.put(e)
+                connected = True
+            else:
+                connected = True
+                self._is_active = True
+                self._stop_event = asyncio.Event()
+                logger.info(f"Connected to {self.serveraddr} successfully")
+                self._in_queue.put(self.ConnectedEvent())
+                logger.info("Starting the handler loop")
+                asyncio.create_task(self._in_queue_handler())
+                asyncio.create_task(self._out_queue_handler())
+                await self._stop_event.wait()
+                logger.info("Waiting for WS to close")
+                await self._websocket.close()
         logger.info("Closing the pipes (child)")
         self._in_queue.close()
         self._out_queue.close()
