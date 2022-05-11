@@ -464,7 +464,6 @@ class KinRecView(ttk.Frame):
     def _callback_apply_params(self):
         params = self._get_kinect_params_from_view()
         self._update_apply_button_state(state="in progress")
-
         self._controller.apply_kinect_params(params)
 
     def _callback_browse_recordings(self):

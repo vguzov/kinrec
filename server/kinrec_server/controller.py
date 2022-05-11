@@ -69,27 +69,41 @@ class KinRecController:
         await recorder.stop_preview()
         self._preview_frame_received.set()
 
-    async def _apply_last_kinect_params(self):
+    async def _apply_last_kinect_params(self, ignore_sync=True):
         kinect_params = self._last_kinect_params
-        recorder_ids = sorted(self._connected_recorders.keys())
-        recorder_sync_delays = self._sync_capture_delay * np.arange(len(recorder_ids))
+        recorder_ids = list(self._connected_recorders.keys())
+        recorder_aliases = [self.kinect_alias(recorder_id) for recorder_id in recorder_ids]
+        will_sync = kinect_params.sync and not ignore_sync
+        if will_sync:
+            if any(alias is None for alias in recorder_aliases):
+                logger.error("Cannot sort Kinects: some ids/aliases are not known")
+                return None
+            else:
+                recorder_aliases_sort_order = np.argsort(recorder_aliases)
+                recorder_ids = np.array(recorder_ids)[recorder_aliases_sort_order]
+                recorder_aliases = np.array(recorder_aliases)[recorder_aliases_sort_order]
+
+            recorder_sync_delays = self._sync_capture_delay * np.arange(len(recorder_ids))
+            recorder_sync_delays = {kin_id: delay for kin_id, delay in zip(recorder_ids, recorder_sync_delays)}
         routines = []
         if len(recorder_ids) > 0:
             master_recorder = recorder_ids[0]
             for recorder_id, recorder in self._connected_recorders.items():
-                recorder_sync_delay = recorder_sync_delays[recorder_id]
                 sync_mode = "none"
-                if kinect_params.sync:
+                if will_sync:
+                    recorder_sync_delay = recorder_sync_delays[recorder_id]
                     if recorder_id == master_recorder:
                         sync_mode = "master"
                     else:
                         sync_mode = "sub"
+                else:
+                    recorder_sync_delay = 0
                 self._params_applied_responses[recorder_id] = None
                 routines.append(recorder.set_kinect_params(kinect_params.rgb_res, kinect_params.depth_wfov,
                                                            kinect_params.depth_binned,
                                                            kinect_params.fps, sync_mode, recorder_sync_delay))
             await asyncio.gather(*routines)
-            return master_recorder if kinect_params.sync else None
+            return master_recorder if will_sync else None
         else:
             return None
 
@@ -99,7 +113,7 @@ class KinRecController:
             raise KinectNotReadyException("Could not get a kinect id from one of the recorders")
         participating_kinects = sorted(participating_kinects)
         self._curr_recording_participating_kinects = set(participating_kinects)
-        master_recorder_id = await self._apply_last_kinect_params()
+        master_recorder_id = await self._apply_last_kinect_params(ignore_sync=False)
         server_time = time.time()
         recording_id = int(server_time * 1000)  # recording_id is a start time in ms
         routines = []
@@ -396,9 +410,10 @@ class KinRecController:
     def comm_file_receive_update(self, recorder_id: int, file_rec_id: int, file_rel_path: str, size_curr_received: int,
             size_already_received: int):
         self._recordings_received_size[file_rec_id] += size_curr_received
-        received_percent = self._recordings_received_size[file_rec_id]/self._recordings_database[file_rec_id].size*100
-        logger.debug(f"Recording {file_rec_id}: received {self._recordings_received_size[file_rec_id]/2**20:.2f}MB/"
-                     f"{self._recordings_database[file_rec_id].size/2**20:.2f}MB ({received_percent:.1f}%)")
+        received_percent = self._recordings_received_size[file_rec_id] / self._recordings_database[
+            file_rec_id].size * 100
+        logger.debug(f"Recording {file_rec_id}: received {self._recordings_received_size[file_rec_id] / 2 ** 20:.2f}MB/"
+                     f"{self._recordings_database[file_rec_id].size / 2 ** 20:.2f}MB ({received_percent:.1f}%)")
         # TODO: add view callback
 
     def comm_file_receive_end(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_size: int,

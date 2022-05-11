@@ -114,8 +114,10 @@ class RecorderComm:
             await self.close()
             return
         if isinstance(msg, str):
-            logger.debug(f"INCOMING MESSAGE: {msg}")
+            msg_text = msg
             msg = json.loads(msg)
+            if msg["type"] != "preview_frame":
+                logger.debug(f"INCOMING MESSAGE: {msg_text}")
             if 'cmd_report' in msg:
                 cmd_report = msg['cmd_report']
                 try:
