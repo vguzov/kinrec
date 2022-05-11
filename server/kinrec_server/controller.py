@@ -99,7 +99,7 @@ class KinRecController:
                     if recorder_id == master_recorder:
                         sync_mode = "master"
                     else:
-                        sync_mode = "sub"
+                        sync_mode = "subordinate"
                 else:
                     recorder_sync_delay = 0
                 self._params_applied_responses[recorder_id] = None
@@ -166,7 +166,7 @@ class KinRecController:
             else:
                 recording.status = "Inconsistent (missing " + ", ".join(
                     recordings_completeness_tracker[recording_id]) + ")"
-
+        logger.info(f"Compiled a recording database with {len(self._recordings_database)} entries")
         self._view.browse_recordings_reply(self._recordings_database)
 
     @staticmethod
@@ -199,6 +199,17 @@ class KinRecController:
                 logger.error(
                     f"Recording {rec_id} cannot be collected: the following kinects are missing {participating_kinects - ready_kinects}")
         await asyncio.gather(*routines)
+
+    async def _delete_recordings(self, recordings_to_delete):
+        for rec_id in recordings_to_delete:
+            curr_routines = []
+            logger.info(f"Deleting recording {rec_id} from kinects")
+            recording = self._recordings_database[rec_id]
+            participating_kinects = set(recording.participating_kinects)
+            for recorder_id, recorder in self._connected_recorders.items():
+                if recorder.kinect_id in participating_kinects:
+                    curr_routines.append(recorder.delete_recording(rec_id))
+            await asyncio.gather(*curr_routines)
 
     ### Actions ###
     def start_preview(self, recorder_id: int) -> bool:
@@ -241,6 +252,9 @@ class KinRecController:
     def collect_recordings(self, recording_ids: Sequence[int]):
         asyncio.create_task(self._collect_recordings(recording_ids))
 
+    def delete_recordings(self, recording_ids: Sequence[int]):
+        asyncio.create_task(self._delete_recordings(recording_ids))
+
     def collect_recordings_info(self):
         self._recordings_database = {}
         for recorder_id, recorder in self._connected_recorders.items():
@@ -259,6 +273,7 @@ class KinRecController:
     def set_view(self, view: KinRecView):
         self._view = view
         self._view.update_server_state("online")
+        self._view.kinect_params_init(self._last_kinect_params)
 
     async def add_recorder(self, recorder: RecorderComm, recorder_id: int):
         assert recorder_id not in self._connected_recorders
@@ -352,6 +367,7 @@ class KinRecController:
             self._view.start_recording_reply(False)
         if self._curr_recording_started_ids == self._curr_recording_participating_kinects:
             self._view.start_recording_reply(True)
+            self._curr_recording_stopped_ids = set()
 
     def comm_stop_recording_reply(self, recorder_id: int, reply_result: bool, info: str = None):
         if reply_result:
@@ -361,7 +377,7 @@ class KinRecController:
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Recording failed to stop, more info: {info}")
             self._curr_recording_stopped_ids.add(recorder_id)
         if self._curr_recording_stopped_ids == self._curr_recording_participating_kinects:
-            # TODO: add view callback to finalize recording stop
+            self._view.stop_recording_reply()
             self._clear_from_last_recording()
 
     def comm_get_recordings_list_reply(self, recorder_id: int, reply_result: bool, recordings: Dict[int, dict] = None,

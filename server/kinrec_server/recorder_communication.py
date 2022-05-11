@@ -304,6 +304,7 @@ class RecorderComm:
 
     async def start_recording(self, recording_id, recording_name, recording_duration, server_time,
             participating_kinects, start_delay):
+        self._append_sent_cmd("stop_recording")
         await self._send({"type": "start_recording", "recording_id": recording_id, "recording_name": recording_name,
                           "recording_duration": recording_duration, "server_time": server_time,
                           "participating_kinects": participating_kinects, "start_delay": start_delay})
@@ -329,6 +330,9 @@ class RecorderComm:
 
     async def reboot(self):
         await self._send({"type": "reboot"})
+
+    def _append_sent_cmd(self, cmd_type):
+        self._sent_cmds.append((cmd_type, None))
 
     async def _send(self, data, waiting_event=None):
         if isinstance(data, dict):

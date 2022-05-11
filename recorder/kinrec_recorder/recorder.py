@@ -425,7 +425,7 @@ class MainController:
         recordings_dict = self.get_recordings(with_size=False)
         if recording_id not in recordings_dict:
             raise FileNotFoundError()
-        recording_name = recordings_dict[recording_id]
+        recording_name = recordings_dict[recording_id]["name"]
         dirpath = os.path.join(self.recordings_dir, self.get_recording_dirname(recording_id, recording_name))
         for filename in files_to_delete:
             filepath = os.path.join(dirpath, filename)
@@ -438,6 +438,7 @@ class MainController:
         if self.recorder is not None:
             if not self.recorder.active:
                 self.finalize_recording()
+                self.net.send({"type": "pong", "cmd_report": statusd("stop_recording")})
 
     def handle_sendfile(self):
         if self.current_sendfile is not None:

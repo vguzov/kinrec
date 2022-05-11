@@ -171,7 +171,8 @@ class KinRecView(ttk.Frame):
         self.browser_records_subsubframe.update_idletasks()
         # _width = 1.3 * sum([header[j].winfo_width() for j in range(len(header))])
         _width = 2.5 * sum([header[j].winfo_width() for j in range(len(header))])
-        _height = 10 * header[0].winfo_height()
+        # TODO: fix the scrolling
+        _height = 30 * header[0].winfo_height()
         browser_records_subframe.config(width=_width + self.browser_records_scrollbar.winfo_width(), height=_height)
         browser_records_canvas.config(scrollregion=browser_records_canvas.bbox("all"))
 
@@ -180,6 +181,8 @@ class KinRecView(ttk.Frame):
         browser_progress_subframe.grid(row=1, column=0)
         FocusButton(browser_progress_subframe, text='Collect!', width=7,
                     command=self._callback_records_collect).grid(row=0, column=0, padx=5, pady=5)
+        FocusButton(browser_progress_subframe, text='Delete', width=7,
+                    command=self._callback_records_verify_delete).grid(row=0, column=1, padx=5, pady=5)
 
         self.browser_frame.grid(row=1, rowspan=3, column=2, sticky="ne", padx=5, pady=5)
         self.browser_frame.grid_remove()
@@ -297,7 +300,7 @@ class KinRecView(ttk.Frame):
             tk.Label(self.browser_records_subsubframe, text=f"{entry.name}"),
             tk.Label(self.browser_records_subsubframe, text=f"{time_str}"),
             tk.Label(self.browser_records_subsubframe, text=f"{params_str}"),
-            tk.Label(self.browser_records_subsubframe, text=f"{entry.size:06.1f}"),
+            tk.Label(self.browser_records_subsubframe, text=f"{entry.size/2**20:6.1f}"),
             tk.Label(self.browser_records_subsubframe, text=f"{entry.status}")
         ]
         return row
@@ -446,7 +449,6 @@ class KinRecView(ttk.Frame):
         self.recording_status_label.configure(text="Press Record! to start recording")
         # Change button style
         self._update_recording_button_state(state="not recording")
-        self._controller.stop_recording()
 
     def browse_recordings_reply(self, recordings_database: Dict[int, RecordsEntry]):
         max_width = -1
@@ -513,8 +515,7 @@ class KinRecView(ttk.Frame):
         if self.state["recording"]["is_on"].get():
             # recording is in progress
             # self._update_recording_button_state(state="waiting")
-            # TODO add call to controller.stop_recording
-            pass
+            self._controller.stop_recording()
         else:
             # recording is not in progress
             name = self.state["recording"]["name"].get()
@@ -533,6 +534,17 @@ class KinRecView(ttk.Frame):
             if variable.get():
                 recording_ids_to_collect.append(recording_id)
         self._controller.collect_recordings(recording_ids_to_collect)
+
+    def _callback_records_verify_delete(self):
+        # TODO: make a window with a confirmation before deleting
+        self._callback_records_delete()
+
+    def _callback_records_delete(self):
+        recording_ids_to_delete = []
+        for recording_id, variable in self.state["recordings_list"]["checkboxes"].items():
+            if variable.get():
+                recording_ids_to_delete.append(recording_id)
+        self._controller.delete_recordings(recording_ids_to_delete)
 
     def _callback_about(self):
         self.menubar.focus_set()
