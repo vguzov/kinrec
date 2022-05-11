@@ -11,6 +11,7 @@ class RecorderState:
     status: str = "offline"  # "offline", "ready", "preview", "recording", "kin. not ready"
     free_space: int = 0  # in GB
     bat_power: int = 0  # 0..100
+    bat_plugged: bool = False
 
 
 @dataclass

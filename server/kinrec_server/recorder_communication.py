@@ -357,8 +357,10 @@ class RecorderComm:
         if "battery" in msg["optionals"]:
             if msg["optionals"]["battery"] is None:
                 self._last_state.bat_power = 0
+                self._last_state.bat_plugged = False
             else:
                 self._last_state.bat_power = int(msg["optionals"]["battery"]["percent"])
+                self._last_state.bat_plugged = bool(msg["optionals"]["battery"]["plugged"])
         if "disk_space" in msg["optionals"]:
             self._last_state.free_space = int(msg["optionals"]["disk_space"]["free"] / 2 ** 30)
         self._last_status_reply_received = True

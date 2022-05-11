@@ -24,7 +24,7 @@ class KinRecView(ttk.Frame):
         self.number_of_kinects = number_of_kinects
 
         # Variables to store state of the system
-        self._state_template_kinect = "Status: {}\nFree space: {:03d} GB\nBatt. power: {:03d}%"
+        self._state_template_kinect = "Status: {}\nFree space: {:03d} GB\nBatt. power: {:03d}%{:s}"
         self._state_template_server = "Status: {}"
         self._recorders = [{
             "state": RecorderState(),
@@ -403,7 +403,7 @@ class KinRecView(ttk.Frame):
 
         self._recorders[recorder_index]["button"].configure(text=text)
         self._recorders[recorder_index]["label"].configure(text=self._state_template_kinect.format(
-            state.status, state.free_space, state.bat_power
+            state.status, state.free_space, state.bat_power, ", Plugged" if state.bat_plugged else ""
         ))
 
     # TODO rename to apply_kinect_params_reply
@@ -413,7 +413,7 @@ class KinRecView(ttk.Frame):
         if result:
             # save new default kinect parameters
             self._params_kinect = self._get_kinect_params_from_view()
-            self.add_destroyable_message("info", "Kinect params applied successfully!")
+            # self.add_destroyable_message("info", "Kinect params applied successfully!")
         else:
             # update params to previous values
             self._update_kinect_params_view(self._params_kinect)
@@ -594,13 +594,13 @@ class KinRecView(ttk.Frame):
         preview_recorder_index = self.state["preview"]["recorder_index"].get()
 
         for recorder_index in range(self.number_of_kinects):
-            kinect_id = self._recorders[recorder_index]["state"].kinect_id
+            kinect_alias = self._recorders[recorder_index]["state"].kinect_alias
             if preview_is_on:
                 if recorder_index == preview_recorder_index:
-                    self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_id}\n(stop preview)",
+                    self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_alias}\n(stop preview)",
                                                                         state=tk.NORMAL)
                 else:
                     self._recorders[recorder_index]["button"].configure(state=tk.DISABLED)
             else:
-                self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_id}\n(launch preview)",
+                self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_alias}\n(launch preview)",
                                                                     state=tk.NORMAL)
