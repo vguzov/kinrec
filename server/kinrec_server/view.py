@@ -424,17 +424,21 @@ class KinRecView(ttk.Frame):
         self._params_kinect = params
         self._update_kinect_params_view(params)
 
-    def start_recording_reply(self, is_successful = True):
+    def start_recording_reply(self, is_successful=True):
         # TODO add timer
-        # Change internal flag
-        self.state["recording"]["is_on"].set(value=True)
-        # Set status frame
-        name = self.state["recording"]["name"].get()
-        self.recording_status_label.configure(text=f"Recording {name} in progress.")
-        # Change button style
-        self._update_recording_button_state(state="recording")
+        if is_successful:
+            # Change internal flag
+            self.state["recording"]["is_on"].set(value=True)
+            # Set status frame
+            name = self.state["recording"]["name"].get()
+            self.recording_status_label.configure(text=f"Recording {name} in progress.")
+            # Change button style
+            self._update_recording_button_state(state="recording")
+        else:
+            # Change button style
+            self._update_recording_button_state(state="not recording")
 
-    def stop_recording(self):
+    def stop_recording_reply(self):
         # Change internal flag
         self.state["recording"]["is_on"].set(value=False)
         # Set status frame
@@ -509,6 +513,7 @@ class KinRecView(ttk.Frame):
         if self.state["recording"]["is_on"].get():
             # recording is in progress
             # self._update_recording_button_state(state="waiting")
+            # TODO add call to controller.stop_recording
             pass
         else:
             # recording is not in progress
