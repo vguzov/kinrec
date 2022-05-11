@@ -48,7 +48,7 @@ class RecorderComm:
     ControllerCallbacks = namedtuple("ControllerCallbacks", " ".join(callback_names))
     unmatched_answers = ["collect_file_start", "collect_file_end"]
 
-    def __init__(self, websocket, controller, recorder_id, connection_close_callback, full_status_update_step=100):
+    def __init__(self, websocket, controller, recorder_id, connection_close_callback, full_status_update_step=30):
         self._recorder_id = recorder_id
         self._websocket = websocket
         self._kinect_id = None

@@ -69,25 +69,29 @@ class KinRecController:
         await recorder.stop_preview()
         self._preview_frame_received.set()
 
-    async def _apply_last_kinect_params(self, ignore_sync=True):
-        kinect_params = self._last_kinect_params
+    def _sort_recorders(self):
         recorder_ids = list(self._connected_recorders.keys())
         recorder_aliases = [self.kinect_alias(recorder_id) for recorder_id in recorder_ids]
+        if any(alias is None for alias in recorder_aliases):
+            logger.error("Cannot sort Recorders: some ids/aliases are not known")
+            return None
+        else:
+            recorder_aliases_sort_order = np.argsort(recorder_aliases)
+            recorder_ids = np.array(recorder_ids)[recorder_aliases_sort_order]
+            return recorder_ids
+
+    async def _apply_last_kinect_params(self, ignore_sync=True):
+        kinect_params = self._last_kinect_params
         will_sync = kinect_params.sync and not ignore_sync
         if will_sync:
-            if any(alias is None for alias in recorder_aliases):
-                logger.error("Cannot sort Kinects: some ids/aliases are not known")
+            recorder_ids = self._sort_recorders()
+            if recorder_ids is None:
                 return None
-            else:
-                recorder_aliases_sort_order = np.argsort(recorder_aliases)
-                recorder_ids = np.array(recorder_ids)[recorder_aliases_sort_order]
-                recorder_aliases = np.array(recorder_aliases)[recorder_aliases_sort_order]
-
+            master_recorder = recorder_ids[0]
             recorder_sync_delays = self._sync_capture_delay * np.arange(len(recorder_ids))
             recorder_sync_delays = {kin_id: delay for kin_id, delay in zip(recorder_ids, recorder_sync_delays)}
         routines = []
-        if len(recorder_ids) > 0:
-            master_recorder = recorder_ids[0]
+        if len(self._connected_recorders) > 0:
             for recorder_id, recorder in self._connected_recorders.items():
                 sync_mode = "none"
                 if will_sync:
@@ -108,11 +112,13 @@ class KinRecController:
             return None
 
     async def _start_recording(self, recording_name: str, recording_duration: float, start_delay: float):
-        participating_kinects = [recorder.kinect_id for recorder in self._connected_recorders.values()]
+        participating_recorders = self._sort_recorders()
+        if participating_recorders is None:
+            participating_recorders = list(self._connected_recorders.keys())
+        participating_kinects = [self._connected_recorders[rid].kinect_id for rid in participating_recorders]
         if any(x is None for x in participating_kinects):
             raise KinectNotReadyException("Could not get a kinect id from one of the recorders")
-        participating_kinects = sorted(participating_kinects)
-        self._curr_recording_participating_kinects = set(participating_kinects)
+        self._curr_recording_participating_kinects = set(participating_recorders)
         master_recorder_id = await self._apply_last_kinect_params(ignore_sync=False)
         server_time = time.time()
         recording_id = int(server_time * 1000)  # recording_id is a start time in ms
