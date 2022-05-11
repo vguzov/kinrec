@@ -1,5 +1,6 @@
 from functools import partial
 import logging
+import sys
 from datetime import datetime, timedelta
 from typing import Dict
 
@@ -102,18 +103,13 @@ class KinRecView(ttk.Frame):
 
     # ============================================= Configuring GUI Layout =============================================
     def _add_top_bar_menu(self):
-        # self.menubar = FocusLabelFrame(self, bd=1)
-        # self.menubar.grid(row=0, column=0, columnspan=2, sticky="new")
-        # # self.menubar.pack(side=tk.TOP, fill='x')
-        #
-        # button = FocusButton(self.menubar, text='About', command=self._callback_about)
-        # # button.pack(side=tk.LEFT)
-        # button = FocusButton(self.menubar, text='Exit', command=self.master.quit)
-        # # button.pack(side=tk.LEFT)
         self.menubar = tk.Menu(self.parent)
 
+        self.menubar.add_command(label='Relaunch', command=self._callback_relaunch)
+        self.menubar.add_command(label='Reboot', command=self._callback_reboot)
+        self.menubar.add_command(label='Shutdown', command=self._callback_shutdown)
         self.menubar.add_command(label='About', command=self._callback_about)
-        self.menubar.add_command(label='Exit', command=self.master.quit)
+        self.menubar.add_command(label='Exit', command=self._callback_exit)
 
         self.parent.config(menu=self.menubar)
 
@@ -545,6 +541,18 @@ class KinRecView(ttk.Frame):
 
         messagebox.showinfo("About Demo", '\n'.join(text))
 
+    def _callback_relaunch(self):
+        pass
+
+    def _callback_reboot(self):
+        self._controller.reboot()
+
+    def _callback_shutdown(self):
+        self._controller.shutdown()
+
+    def _callback_exit(self):
+        # TODO check if warning can be escaped
+        self.parent.destroy()
     # ==================================================================================================================
 
     def _update_kinect_params_view(self, params: KinectParams):
