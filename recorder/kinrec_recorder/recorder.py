@@ -631,7 +631,7 @@ class MainController:
             elif msgt == "shutdown":
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
                 logger.info("Received shutdown message, attempting to call 'sudo shutdown -s now'")
-                os.system("sudo shutdown -s now")
+                os.system("sudo shutdown now")
             elif msgt == "reboot":
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
                 logger.info("Received reboot message, attempting to call 'sudo shutdown -r now'")
