@@ -228,14 +228,12 @@ class KinRecController:
             asyncio.create_task(recorder.get_recordings_list())
 
     def shutdown(self):
-        if self._curr_recording_participating_kinects is not None:
-            for recorder_id, recorder in self._connected_recorders.items():
-                asyncio.create_task(recorder.shutdown())
+        for recorder_id, recorder in self._connected_recorders.items():
+            asyncio.create_task(recorder.shutdown())
 
     def reboot(self):
-        if self._curr_recording_participating_kinects is not None:
-            for recorder_id, recorder in self._connected_recorders.items():
-                asyncio.create_task(recorder.reboot())
+        for recorder_id, recorder in self._connected_recorders.items():
+            asyncio.create_task(recorder.reboot())
 
     ### Methods ###
     def set_view(self, view: KinRecView):
