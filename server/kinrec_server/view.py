@@ -141,12 +141,24 @@ class KinRecView(ttk.Frame):
         browser_records_subframe.grid_propagate(False)
         browser_records_subframe.grid(row=0, column=0, padx=5, pady=5)
         # canvas that holds records subsubframe and scrollbar
-        browser_records_canvas = tk.Canvas(browser_records_subframe)
-        browser_records_canvas.grid(row=0, column=0, sticky="news")
+        self.browser_records_canvas = tk.Canvas(browser_records_subframe)
+        browser_records_canvas = self.browser_records_canvas
         # subsubframe
         self.browser_records_subsubframe = FocusLabelFrame(browser_records_canvas, bg="white")
-        browser_records_canvas.create_window((0, 0), window=self.browser_records_subsubframe, anchor='nw')
-        # browser_records_subsubframe.grid(row=0, column=0)
+        # scrollbar
+        self.browser_records_scrollbar = tk.Scrollbar(
+            browser_records_subframe, orient="vertical", command=browser_records_canvas.yview
+        )
+        browser_records_canvas.configure(yscrollcommand=self.browser_records_scrollbar.set)
+
+        # pack
+        self.browser_records_scrollbar.pack(side="right", fill="y")
+        browser_records_canvas.pack(side="left", fill="both", expand=True)
+        browser_records_canvas.create_window((4, 4), window=self.browser_records_subsubframe, anchor='nw')
+        self.browser_records_subsubframe.bind(
+            "<Configure>",
+            lambda event, canvas=browser_records_canvas: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
         # header for records list in subsubframe
         self.browser_records_database = dict()
         header = [
@@ -161,20 +173,13 @@ class KinRecView(ttk.Frame):
         for index, label in enumerate(header):
             label.grid(row=0, column=index, padx=2, sticky='news')
         self.browser_records_database[-1] = header
-        # scrollbar
-        self.browser_records_scrollbar = tk.Scrollbar(
-            browser_records_subframe, orient="vertical", command=browser_records_canvas.yview
-        )
-        self.browser_records_scrollbar.grid(row=0, column=1, sticky='ns')
-        browser_records_canvas.configure(yscrollcommand=self.browser_records_scrollbar.set)
+
         # resize canvas to fit everything
         self.browser_records_subsubframe.update_idletasks()
-        # _width = 1.3 * sum([header[j].winfo_width() for j in range(len(header))])
-        _width = 2.5 * sum([header[j].winfo_width() for j in range(len(header))])
-        # TODO: fix the scrolling
-        _height = 30 * header[0].winfo_height()
-        browser_records_subframe.config(width=_width + self.browser_records_scrollbar.winfo_width(), height=_height)
-        browser_records_canvas.config(scrollregion=browser_records_canvas.bbox("all"))
+        _width = 1.2 * sum([header[j].winfo_width() for j in range(len(header))])
+        _height = 25 * header[0].winfo_height()
+        browser_records_canvas.config(width=_width + self.browser_records_scrollbar.winfo_width(), height=_height)
+
 
         # Subframe with download button and progressbar
         browser_progress_subframe = FocusLabelFrame(self.browser_frame, text="Collection")
@@ -458,12 +463,13 @@ class KinRecView(ttk.Frame):
             width = 0
             for column, widget in enumerate(row):
                 widget.grid(row=index+1, column=column, padx=2, sticky='news')
+                widget.update()
                 width += widget.winfo_width()
             max_width = max(max_width, 1.1 * width)
             self.browser_records_database[recording_id] = row
 
         # adjust width
-        # self.browser_records_subframe.config(width=max_width + self.browser_records_scrollbar.winfo_width())
+        self.browser_records_canvas.config(width=max_width + self.browser_records_scrollbar.winfo_width())
     # ==================================================================================================================
 
     # ================================================ Button callbacks ================================================
