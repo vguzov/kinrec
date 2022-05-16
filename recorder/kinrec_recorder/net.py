@@ -4,6 +4,7 @@ import websockets
 import asyncio
 import logging
 import json
+import queue
 from multiprocessing import Process, Queue as MPQueue
 
 
@@ -137,4 +138,10 @@ class NetHandler:
                 await self._websocket.close()
         logger.info("Closing the pipes (child)")
         self._in_queue.close()
+        while not self._out_queue.empty():
+            try:
+                self._out_queue.get_nowait()
+            except queue.Empty:
+                pass
         self._out_queue.close()
+        logger.info("Child process mainloop completed")

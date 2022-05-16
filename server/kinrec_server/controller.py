@@ -47,9 +47,15 @@ class KinRecController:
         self._curr_state = "idle"
         self._files_to_collect: Dict[int, List[str]] = defaultdict(list)
         self._recordings_received_size: Dict[int, int] = {}
+        self._receive_speed_timeframe = 3
+        self._recordings_received_last_size: Dict[int, np.ndarray] = {}
+        self._recordings_received_last_timestamp: Dict[int, int] = {}
 
-    def kinect_alias(self, recorder_id: int) -> Optional[int]:
+    def kinect_alias_from_recorder(self, recorder_id: int) -> Optional[int]:
         return self._kinect_id_mapping[self._connected_recorders[recorder_id].kinect_id]
+
+    def kinect_alias_from_kinect(self, kinect_id: str) -> Optional[int]:
+        return self._kinect_id_mapping[kinect_id]
 
     async def _start_preview(self, recorder_id, color_scale: Union[float, int] = 3,
             depth_scale: Optional[int] = 1):
@@ -71,7 +77,7 @@ class KinRecController:
 
     def _sort_recorders(self):
         recorder_ids = list(self._connected_recorders.keys())
-        recorder_aliases = [self.kinect_alias(recorder_id) for recorder_id in recorder_ids]
+        recorder_aliases = [self.kinect_alias_from_recorder(recorder_id) for recorder_id in recorder_ids]
         if any(alias is None for alias in recorder_aliases):
             logger.error("Cannot sort Recorders: some ids/aliases are not known")
             return None
@@ -140,9 +146,12 @@ class KinRecController:
     def _compile_recordings_list(self, recorderwise_reclists: Dict[int, dict]):
         recordings_completeness_tracker = {}
         self._recordings_database = {}
+        self._recorderwise_reclists = {}
         for recorder_id, recordings_dict in recorderwise_reclists.items():
+            self._recorderwise_reclists[recorder_id] = {}
             for recording_id, recording_info in recordings_dict.items():
                 recording_id = int(recording_id)
+                self._recorderwise_reclists[recorder_id][recording_id] = recording_info
                 if recording_id not in self._recordings_database:
                     recording = RecordsEntry.from_dict(recording_info)
                     recordings_completeness_tracker[recording_id] = recording_info["participating_kinects"]
@@ -180,7 +189,9 @@ class KinRecController:
             logger.info(f"Collecting recording {rec_id}")
             recording = self._recordings_database[rec_id]
             self._recordings_received_size[rec_id] = 0
-            participating_kinects = set(recording.participating_kinects)
+            self._recordings_received_last_size[rec_id] = np.zeros(self._receive_speed_timeframe, dtype=np.int64)
+            self._recordings_received_last_timestamp[rec_id] = 0
+            participating_kinects = set(recording.participating_kinects.keys())
             curr_routines = []
             ready_kinects = set()
             rec_path = os.path.join(self._workdir, "recordings", self.get_recording_dirname(rec_id, recording.name))
@@ -189,10 +200,18 @@ class KinRecController:
             json.dump(recording.to_dict(), open(os.path.join(rec_path, "metadata.json"), "w"), indent=2)
             self._curr_collection_participating_recorders = []
             for recorder_id, recorder in self._connected_recorders.items():
-                if recorder.kinect_id in participating_kinects:
-                    curr_routines.append(
-                        recorder.collect(rec_id, rec_path))
-                    ready_kinects.add(recorder.kinect_id)
+                if rec_id in self._recorderwise_reclists[recorder_id]:
+                    recorder_recording_kinect_id = self._recorderwise_reclists[recorder_id][rec_id]["kinect_id"]
+                    if recorder_recording_kinect_id in participating_kinects:
+                        kin_alias = self.kinect_alias_from_kinect(recorder_recording_kinect_id)
+                        if kin_alias is None:
+                            file_prefix = f"_{recorder_recording_kinect_id}"
+                        else:
+                            file_prefix = f"{kin_alias}_{recorder_recording_kinect_id}"
+                        curr_routines.append(recorder.collect(rec_id, rec_path, file_prefix))
+                        ready_kinects.add(recorder_recording_kinect_id)
+                else:
+                    logger.warning(f"{rec_id} not in {list(self._recorderwise_reclists[recorder_id].keys())}")
             if ready_kinects == participating_kinects:
                 routines += curr_routines
             else:
@@ -257,6 +276,7 @@ class KinRecController:
 
     def collect_recordings_info(self):
         self._recordings_database = {}
+        self._recorder_reclist_responses = {}
         for recorder_id, recorder in self._connected_recorders.items():
             self._recorder_reclist_responses[recorder_id] = None
             asyncio.create_task(recorder.get_recordings_list())
@@ -299,7 +319,7 @@ class KinRecController:
 
     def comm_get_kinect_calibration_reply(self, recorder_id: int, reply_result: bool,
             kinect_id: str, kinect_calibration: dict, info: str = None):
-        kin_alias = self.kinect_alias(recorder_id)
+        kin_alias = self.kinect_alias_from_recorder(recorder_id)
         self._connected_recorders[recorder_id].set_kinect_alias(kin_alias)
         if not reply_result:
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Failed to obtain kinect calibration, more info: {info}")
@@ -307,7 +327,7 @@ class KinRecController:
     def comm_set_kinect_params_reply(self, recorder_id: int, reply_result: bool, info: str = None):
         self._params_applied_responses[recorder_id] = reply_result
         if not reply_result:
-            kin_alias = self.kinect_alias(recorder_id)
+            kin_alias = self.kinect_alias_from_recorder(recorder_id)
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Failed to set parameters, more info: {info}")
         responses = list(self._params_applied_responses.values())
         done_responses = [x is not None for x in responses]
@@ -318,7 +338,7 @@ class KinRecController:
         if reply_result:
             self._view.start_preview(recorder_id)
         else:
-            kin_alias = self.kinect_alias(recorder_id)
+            kin_alias = self.kinect_alias_from_recorder(recorder_id)
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Preview failed to start, more info: {info}")
 
     def comm_get_preview_frame_reply(self, recorder_id: int, reply_result: bool, color: np.ndarray, color_ts: int,
@@ -354,14 +374,14 @@ class KinRecController:
     def comm_stop_preview_reply(self, recorder_id: int, reply_result: bool, info: str = None):
         self._view.stop_preview(recorder_id)
         if not reply_result:
-            kin_alias = self.kinect_alias(recorder_id)
+            kin_alias = self.kinect_alias_from_recorder(recorder_id)
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Preview failed to stop, more info: {info}")
 
     def comm_start_recording_reply(self, recorder_id: int, reply_result: bool, info: str = None):
         if reply_result:
             self._curr_recording_started_ids.add(recorder_id)
         else:
-            kin_alias = self.kinect_alias(recorder_id)
+            kin_alias = self.kinect_alias_from_recorder(recorder_id)
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Recording failed to start, more info: {info}")
             self.stop_recording()
             self._view.start_recording_reply(False)
@@ -373,7 +393,7 @@ class KinRecController:
         if reply_result:
             self._curr_recording_stopped_ids.add(recorder_id)
         else:
-            kin_alias = self.kinect_alias(recorder_id)
+            kin_alias = self.kinect_alias_from_recorder(recorder_id)
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Recording failed to stop, more info: {info}")
             self._curr_recording_stopped_ids.add(recorder_id)
         if self._curr_recording_stopped_ids == self._curr_recording_participating_kinects:
@@ -386,7 +406,7 @@ class KinRecController:
             self._recorder_reclist_responses[recorder_id] = recordings
         else:
             self._recorder_reclist_responses[recorder_id] = {}
-            kin_alias = self.kinect_alias(recorder_id)
+            kin_alias = self.kinect_alias_from_recorder(recorder_id)
             logger.error(
                 f"Recorder {recorder_id}:{kin_alias} failed to acquire recordings, more info: {info}")
         replies = list(self._recorder_reclist_responses.values())
@@ -397,7 +417,7 @@ class KinRecController:
     def comm_collect_reply(self, recorder_id: int, reply_result: bool, recording_id: int, files: List[str],
             info: str = None):
         if not reply_result:
-            kin_alias = self.kinect_alias(recorder_id)
+            kin_alias = self.kinect_alias_from_recorder(recorder_id)
             logger.error(
                 f"Recorder {recorder_id}:{kin_alias} failed to acquire recording {recording_id}, more info: {info}")
         else:
@@ -411,36 +431,49 @@ class KinRecController:
         pass
 
     def comm_shutdown_reply(self, recorder_id: int, reply_result: bool, info: str = None):
-        kin_alias = self.kinect_alias(recorder_id)
+        kin_alias = self.kinect_alias_from_recorder(recorder_id)
         if reply_result:
             logger.warning(f"Recorder {recorder_id}:{kin_alias} shutdown")
         else:
             logger.error(f"Recorder {recorder_id}:{kin_alias} failed to shut down, more info: {info}")
 
     def comm_reboot_reply(self, recorder_id: int, reply_result: bool, info: str = None):
-        kin_alias = self.kinect_alias(recorder_id)
+        kin_alias = self.kinect_alias_from_recorder(recorder_id)
         if reply_result:
             logger.warning(f"Recorder {recorder_id}:{kin_alias} reboot")
         else:
             logger.error(f"Recorder {recorder_id}:{kin_alias} failed to reboot, more info: {info}")
 
     def comm_file_receive_start(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_size: int):
-        kin_alias = self.kinect_alias(recorder_id)
+        kin_alias = self.kinect_alias_from_recorder(recorder_id)
         logger.debug(
             f"Will receive a file {file_rel_path} ({file_size / 2 ** 20:.2f}MB) from recorder {recorder_id}:{kin_alias}")
 
     def comm_file_receive_update(self, recorder_id: int, file_rec_id: int, file_rel_path: str, size_curr_received: int,
             size_already_received: int):
         self._recordings_received_size[file_rec_id] += size_curr_received
+        curr_timestamp = time.time()
+        if self._recordings_received_last_timestamp[file_rec_id] < int(curr_timestamp) - self._receive_speed_timeframe:
+            self._recordings_received_last_timestamp[file_rec_id] = int(curr_timestamp)
+            self._recordings_received_last_size[file_rec_id][:] = 0
+        else:
+            while self._recordings_received_last_timestamp[file_rec_id] < int(curr_timestamp):
+                self._recordings_received_last_timestamp[file_rec_id] += 1
+                self._recordings_received_last_size[file_rec_id] = np.roll(self._recordings_received_last_size[file_rec_id], -1)
+                self._recordings_received_last_size[file_rec_id][-1] = 0
+        self._recordings_received_last_size[file_rec_id][-1] += size_curr_received
         received_percent = self._recordings_received_size[file_rec_id] / self._recordings_database[
             file_rec_id].size * 100
+        avg_speed = self._recordings_received_last_size[file_rec_id].sum() / (
+                    self._receive_speed_timeframe - 1 + np.modf(curr_timestamp)[0])
         logger.debug(f"Recording {file_rec_id}: received {self._recordings_received_size[file_rec_id] / 2 ** 20:.2f}MB/"
-                     f"{self._recordings_database[file_rec_id].size / 2 ** 20:.2f}MB ({received_percent:.1f}%)")
+                     f"{self._recordings_database[file_rec_id].size / 2 ** 20:.2f}MB ({received_percent:.1f}%), "
+                     f"(speed is {avg_speed / 2 ** 20:.2f} MB/s)")
         # TODO: add view callback
 
     def comm_file_receive_end(self, recorder_id: int, file_rec_id: int, file_rel_path: str, file_size: int,
             file_received: int):
-        kin_alias = self.kinect_alias(recorder_id)
+        kin_alias = self.kinect_alias_from_recorder(recorder_id)
         if file_size != file_received:
             logger.error(
                 f"Received a corrupt file from {recorder_id}:{kin_alias}: {file_rel_path}, "

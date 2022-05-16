@@ -59,6 +59,7 @@ class RecorderComm:
         self._kinect_status = "kin. not ready"
         self._recorder_transferring = False
         self._recording_paths = {}
+        self._recording_prefixes = {}
         self._current_file_descriptor = None
         self._current_file_size = None
         self._current_file_received = None
@@ -135,7 +136,9 @@ class RecorderComm:
                         logger.info(f"{cmdt} -- OK")
 
                     if self._kinect_id is None and cmdt not in ["get_kinect_calibration", "get_status",
-                                                                "set_kinect_params"]:
+                                                                "set_kinect_params", "get_recordings_list",
+                                                                "collect", "delete_recording", "shutdown",
+                                                                "reboot"]:
                         logger.error(f"Received {cmdt} before obtaining Kinect info")
                         return
 
@@ -192,6 +195,7 @@ class RecorderComm:
                                                         f"Cannot receive more than one file at once")
                     rec_id = msg["recording_id"]
                     rec_path = self._recording_paths[rec_id]
+                    rec_file_prefix = self._recording_prefixes[rec_id]
                     typename, file_ext = os.path.basename(msg["relative_file_path"]).split(".")[-2:]
                     download_folder = ""
                     if "color" in typename:
@@ -203,10 +207,7 @@ class RecorderComm:
                     elif "time" in typename:
                         download_folder = "times"
 
-                    if self.kinect_alias is None:
-                        filename = f"_{self.kinect_id}.{file_ext}"
-                    else:
-                        filename = f"{self.kinect_alias}_{self.kinect_id}.{file_ext}"
+                    filename = f"{rec_file_prefix}.{file_ext}"
 
                     self._current_file_rel_path = os.path.join(download_folder, filename)
                     self._current_file_rec_id = rec_id
@@ -315,8 +316,9 @@ class RecorderComm:
     async def get_recordings_list(self):
         await self._send({"type": "get_recordings_list"})
 
-    async def collect(self, recording_id, recording_path):
+    async def collect(self, recording_id, recording_path, file_prefix):
         self._recording_paths[recording_id] = recording_path
+        self._recording_prefixes[recording_id] = file_prefix
         await self._send({"type": "collect", "recording_id": recording_id})
 
     async def delete_recording(self, recording_id):

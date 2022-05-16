@@ -2,6 +2,7 @@ import logging
 import numpy as np
 from typing import NamedTuple, Optional, Dict
 from dataclasses import dataclass
+from colorama import init as colorama_init, Fore
 
 
 @dataclass
@@ -163,27 +164,25 @@ class RecorderDisconnectedException(Exception):
 
 
 # Logging
+colorama_init()
+
+
 class ColoredFormatter(logging.Formatter):
-    grey = "\x1b[38;20m"
-    yellow = "\x1b[33;20m"
-    red = "\x1b[31;20m"
-    bold_red = "\x1b[31;1m"
-    dark_grey = "\x1b[30;1m"
-    reset = "\x1b[0m"
     format = '%(asctime)s:%(name)s:%(levelname)s::: %(message)s'
 
     FORMATS = {
-        logging.DEBUG: dark_grey + format + reset,
-        logging.INFO: grey + format + reset,
-        logging.WARNING: yellow + format + reset,
-        logging.ERROR: red + format + reset,
-        logging.CRITICAL: bold_red + format + reset
+        logging.DEBUG: Fore.LIGHTWHITE_EX + format + Fore.RESET,
+        logging.INFO: format,
+        logging.WARNING: Fore.YELLOW + format + Fore.RESET,
+        logging.ERROR: Fore.RED + format + Fore.RESET,
+        logging.CRITICAL: Fore.LIGHTRED_EX + format + Fore.RESET
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._formatters = {level: logging.Formatter(log_fmt, datefmt='%H:%M:%S') for level, log_fmt in
                             self.FORMATS.items()}
+
 
     def format(self, record):
         formatter = self._formatters.get(record.levelno)
