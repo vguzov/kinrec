@@ -156,8 +156,8 @@ class Kinect:
                 time.sleep(retry_period)
         color_data = self.device.get_color_data()
         depth_data = self.device.get_depth_data()
-        color_ts = int(deepcopy(color_data.timestamp_nsec))
-        depth_ts = int(deepcopy(depth_data.timestamp_nsec))
+        color_ts = int(deepcopy(color_data.device_timestamp_usec))
+        depth_ts = int(deepcopy(depth_data.device_timestamp_usec))
         color = np.array(color_data.buffer, copy=False)[:, :, 2::-1].copy()
         depth = np.array(depth_data.buffer, copy=True)
         return color, depth, color_ts, depth_ts
