@@ -197,13 +197,14 @@ class KinRecController:
             rec_path = os.path.join(self._workdir, "recordings", self.get_recording_dirname(rec_id, recording.name))
             for rec_folder in rec_folders:
                 os.makedirs(os.path.join(rec_path, rec_folder), exist_ok=True)
-            json.dump(recording.to_dict(), open(os.path.join(rec_path, "metadata.json"), "w"), indent=2)
+            recording_dict = recording.to_dict()
             self._curr_collection_participating_recorders = []
             for recorder_id, recorder in self._connected_recorders.items():
                 if rec_id in self._recorderwise_reclists[recorder_id]:
                     recorder_recording_kinect_id = self._recorderwise_reclists[recorder_id][rec_id]["kinect_id"]
                     if recorder_recording_kinect_id in participating_kinects:
                         kin_alias = self.kinect_alias_from_kinect(recorder_recording_kinect_id)
+                        recording_dict["participating_kinects"][recorder_recording_kinect_id]["alias"] = kin_alias
                         if kin_alias is None:
                             file_prefix = f"_{recorder_recording_kinect_id}"
                         else:
@@ -212,6 +213,7 @@ class KinRecController:
                         ready_kinects.add(recorder_recording_kinect_id)
                 else:
                     logger.warning(f"{rec_id} not in {list(self._recorderwise_reclists[recorder_id].keys())}")
+            json.dump(recording_dict, open(os.path.join(rec_path, "metadata.json"), "w"), indent=2)
             if ready_kinects == participating_kinects:
                 routines += curr_routines
             else:
