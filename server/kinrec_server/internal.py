@@ -1,6 +1,6 @@
 import logging
 import numpy as np
-from typing import NamedTuple, Optional, Dict
+from typing import NamedTuple, Optional, Dict, List
 from dataclasses import dataclass
 from colorama import init as colorama_init, Fore
 
@@ -65,7 +65,7 @@ class KinectParams:
 
 
 @dataclass
-class CameraIntrinsics:
+class CameraParameters:
     cx: float
     cy: float
     fx: float
@@ -80,26 +80,36 @@ class CameraIntrinsics:
     p2: float
     width: int
     height: int
+    cam2world: Dict[str, np.ndarray]
 
-    _param_names = ['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6', 'height', 'width']
+    _intr_param_names = ['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6', 'height', 'width']
     _opencv_param_names = ['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6']
 
     @classmethod
-    def from_dict(cls, intr_dict: dict):
-        params = {k: v for k, v in intr_dict.items() if k in cls._param_names}
+    def from_dict(cls, param_dict: dict):
+        params = {k: v for k, v in param_dict.items() if k in cls._intr_param_names}
         return cls(**params)
+    @staticmethod
+    def _extrinsics_from_dict(extr_dict: dict):
+        cam2world = {k: np.array(extr_dict[k], dtype=np.float64) for k in ["R", "t"]}
+        return cam2world
 
     def to_dict(self, with_opencv: bool = True) -> dict:
-        intr_dict = {k: getattr(self, k) for k in self._param_names}
+        param_dict = {k: getattr(self, k) for k in self._intr_param_names}
+        param_dict["cam2world"] = self._extrinsics_to_dict()
         if with_opencv:
-            intr_dict["opencv"] = [intr_dict[x] for x in self._opencv_param_names]
-        return intr_dict
+            param_dict["opencv"] = [param_dict[x] for x in self._opencv_param_names]
+        return param_dict
+
+    def _extrinsics_to_dict(self):
+        extr_dict = {k: self.cam2world[k].tolist() for k in ["R", "t"]}
+        return extr_dict
 
 
 @dataclass
 class KinectCalibration:
-    color: CameraIntrinsics
-    depth: CameraIntrinsics
+    color: CameraParameters
+    depth: CameraParameters
     color2depth_R: np.ndarray
     depth2color_R: np.ndarray
     color2depth_t: np.ndarray
@@ -107,8 +117,8 @@ class KinectCalibration:
 
     @classmethod
     def from_dict(cls, calib_dict):
-        color_calib = CameraIntrinsics.from_dict(calib_dict["color"])
-        depth_calib = CameraIntrinsics.from_dict(calib_dict["depth"])
+        color_calib = CameraParameters.from_dict(calib_dict["color"])
+        depth_calib = CameraParameters.from_dict(calib_dict["depth"])
         self = cls(color=color_calib, depth=depth_calib,
                    color2depth_R=np.array(calib_dict["color2depth"]["R"]),
                    color2depth_t=np.array(calib_dict["color2depth"]["t"]),
