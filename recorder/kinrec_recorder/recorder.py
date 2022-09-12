@@ -209,8 +209,10 @@ class Kinect:
         depth_RT = make_RT(depth_R, depth_t)  # depth2world
         color_RT_inv = se3_inv(color_RT)  # world2color
         depth_RT_inv = se3_inv(depth_RT)  # world2depth
-        color2depth_RT = depth_RT_inv.dot(color_RT)
-        depth2color_RT = color_RT_inv.dot(depth_RT)
+        color2depth_RT = depth_RT.dot(color_RT_inv)
+        depth2color_RT = color_RT.dot(depth_RT_inv)
+        color_calib_dict["cam2world"] = {"R": color_RT_inv[:3, :3].tolist(), "t": color_RT_inv[:3, 3].tolist()}
+        depth_calib_dict["cam2world"] = {"R": depth_RT_inv[:3, :3].tolist(), "t": depth_RT_inv[:3, 3].tolist()}
 
         return {"color": color_calib_dict,
                 "depth": depth_calib_dict,
