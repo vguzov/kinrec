@@ -1,6 +1,6 @@
 import logging
 import numpy as np
-from typing import NamedTuple, Optional, Dict, List
+from typing import NamedTuple, Optional, Dict
 from dataclasses import dataclass
 from colorama import init as colorama_init, Fore
 
@@ -80,26 +80,32 @@ class CameraParameters:
     p2: float
     width: int
     height: int
-    cam2world: Dict[str, np.ndarray]
+    cam2world: Optional[Dict[str, np.ndarray]]
 
     _intr_param_names = ['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6', 'height', 'width']
     _opencv_param_names = ['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'k4', 'k5', 'k6']
 
     @classmethod
-    def from_dict(cls, param_dict: dict):
-        params = {k: v for k, v in param_dict.items() if k in cls._intr_param_names}
+    def from_dict(cls, params_dict: dict):
+        params = {k: v for k, v in params_dict.items() if k in cls._intr_param_names}
+        if "cam2world" in params_dict:
+            params["cam2world"] = cls._extrinsics_from_dict(params_dict["cam2world"])
+        else:
+            params["cam2world"] = None
         return cls(**params)
+
     @staticmethod
     def _extrinsics_from_dict(extr_dict: dict):
         cam2world = {k: np.array(extr_dict[k], dtype=np.float64) for k in ["R", "t"]}
         return cam2world
 
     def to_dict(self, with_opencv: bool = True) -> dict:
-        param_dict = {k: getattr(self, k) for k in self._intr_param_names}
-        param_dict["cam2world"] = self._extrinsics_to_dict()
+        params_dict = {k: getattr(self, k) for k in self._intr_param_names}
+        if self.cam2world is not None:
+            params_dict["cam2world"] = self._extrinsics_to_dict()
         if with_opencv:
-            param_dict["opencv"] = [param_dict[x] for x in self._opencv_param_names]
-        return param_dict
+            params_dict["opencv"] = [params_dict[x] for x in self._opencv_param_names]
+        return params_dict
 
     def _extrinsics_to_dict(self):
         extr_dict = {k: self.cam2world[k].tolist() for k in ["R", "t"]}
@@ -192,7 +198,6 @@ class ColoredFormatter(logging.Formatter):
         super().__init__(*args, **kwargs)
         self._formatters = {level: logging.Formatter(log_fmt, datefmt='%H:%M:%S') for level, log_fmt in
                             self.FORMATS.items()}
-
 
     def format(self, record):
         formatter = self._formatters.get(record.levelno)
