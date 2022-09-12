@@ -130,9 +130,9 @@ class KinRecController:
         recording_id = int(server_time * 1000)  # recording_id is a start time in ms
         routines = []
         for recorder_id, recorder in self._connected_recorders.items():
-            delay = 0
-            if master_recorder_id is None or recorder_id == master_recorder_id:
-                delay = start_delay
+            delay = start_delay
+            # if master_recorder_id is None or recorder_id == master_recorder_id:
+            #     delay = start_delay
             routines.append(recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
                                                      participating_kinects, delay))
         await asyncio.gather(*routines)

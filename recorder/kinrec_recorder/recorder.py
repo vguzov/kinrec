@@ -88,6 +88,8 @@ class Kinect:
         self.depth_calibration = None
         self.color_calibration = None
         self.depth2pc_map = None
+        self.depth2color_transform = None
+        self.color2depth_transform = None
         self._id = None
         self.active = False
 
@@ -170,6 +172,10 @@ class Kinect:
             self.color_calibration = self.device.get_color_calibration()
             self.depth2pc_map = self.device.get_depth2pc_map()
             self._id = self.device.get_serial_number()
+            self.depth2color_transform = {"R": self.device.get_depth2color_rotation_matrix().copy(),
+                                          "t": (self.device.get_depth2color_translation_vector()[:, 0] / 1000.).copy()}
+            self.color2depth_transform = {"R": self.device.get_color2depth_rotation_matrix().copy(),
+                                          "t": (self.device.get_color2depth_translation_vector()[:, 0] / 1000.).copy()}
 
     def stop(self):
         if not self.active:
@@ -209,15 +215,15 @@ class Kinect:
         depth_RT = make_RT(depth_R, depth_t)  # world2depth
         color_RT_inv = se3_inv(color_RT)  # color2world
         depth_RT_inv = se3_inv(depth_RT)  # depth2world
-        color2depth_RT = depth_RT.dot(color_RT_inv)
-        depth2color_RT = color_RT.dot(depth_RT_inv)
+        # color2depth_RT = depth_RT.dot(color_RT_inv)
+        # depth2color_RT = color_RT.dot(depth_RT_inv)
         color_calib_dict["cam2world"] = {"R": color_RT_inv[:3, :3].tolist(), "t": color_RT_inv[:3, 3].tolist()}
         depth_calib_dict["cam2world"] = {"R": depth_RT_inv[:3, :3].tolist(), "t": depth_RT_inv[:3, 3].tolist()}
 
         return {"color": color_calib_dict,
                 "depth": depth_calib_dict,
-                "color2depth": {"R": color2depth_RT[:3, :3].tolist(), "t": color2depth_RT[:3, 3].tolist()},
-                "depth2color": {"R": depth2color_RT[:3, :3].tolist(), "t": depth2color_RT[:3, 3].tolist()},
+                "color2depth": {k: v.tolist() for k, v in self.color2depth_transform.items()},
+                "depth2color": {k: v.tolist() for k, v in self.depth2color_transform.items()},
                 "params": self.params}
 
     @property
