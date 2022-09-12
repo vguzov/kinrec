@@ -204,11 +204,12 @@ class KinRecController:
                     recorder_recording_kinect_id = self._recorderwise_reclists[recorder_id][rec_id]["kinect_id"]
                     if recorder_recording_kinect_id in participating_kinects:
                         kin_alias = self.kinect_alias_from_kinect(recorder_recording_kinect_id)
-                        recording_dict["participating_kinects"][recorder_recording_kinect_id]["alias"] = kin_alias
                         if kin_alias is None:
                             file_prefix = f"_{recorder_recording_kinect_id}"
                         else:
                             file_prefix = f"{kin_alias}_{recorder_recording_kinect_id}"
+                        recording_dict["participating_kinects"][recorder_recording_kinect_id]["alias"] = kin_alias
+                        recording_dict["participating_kinects"][recorder_recording_kinect_id]["file_prefix"] = file_prefix
                         curr_routines.append(recorder.collect(rec_id, rec_path, file_prefix))
                         ready_kinects.add(recorder_recording_kinect_id)
                 else:
