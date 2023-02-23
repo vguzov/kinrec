@@ -21,7 +21,7 @@ class KinectParams:
     depth_wfov: bool = False
     depth_binned: bool = False
     fps: int = 30
-    sync: bool = True
+    sync: bool = False
     sync_master_id: Optional[str] = None
 
     @classmethod
@@ -155,7 +155,7 @@ class RecordsEntry:
     size: int = 0  # in bytes
     status: str = ""  # Consistent (n/n) or Inconsistent (m/n, missing: k_i)
     participating_kinects: Dict[str, KinectCalibration] = None
-    start_params: dict = None
+    kinectwise_start_params: dict = None
 
     @classmethod
     def from_dict(cls, recording_info: dict):
@@ -165,14 +165,16 @@ class RecordsEntry:
                         date=recording_info["server_time"], length=recording_info["duration"],
                         size=recording_info["size"], params=recording_params,
                         participating_kinects={x: None for x in recording_info["participating_kinects"]},
-                        start_params=recording_info.get("start_params", None))
+                        kinectwise_start_params={} if "start_params" in recording_info else None)
         return recording
 
     def to_dict(self):
         entry_dict = {"id": self.id, "name": self.name, "server_time": self.date, "duration": self.length,
                       "size": self.size, "status": self.status, "params": self.params.to_dict(),
-                      "participating_kinects": {k: v.to_dict() for k, v in self.participating_kinects.items()},
-                      "start_params": self.start_params}
+                      "participating_kinects": {k: v.to_dict() for k, v in self.participating_kinects.items()}}
+        if self.kinectwise_start_params is not None:
+            for kinect_id, kinect_dict in entry_dict["participating_kinects"].items():
+                kinect_dict["start_params"] = self.kinectwise_start_params[kinect_id]
         return entry_dict
 
 

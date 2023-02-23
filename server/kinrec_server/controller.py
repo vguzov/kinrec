@@ -169,6 +169,8 @@ class KinRecController:
                     recordings_completeness_tracker[recording_id].remove(kinect_id)
                     recording.participating_kinects[kinect_id] = \
                         KinectCalibration.from_dict(recording_info["kinect_calibration"])
+                    if recording.kinectwise_start_params is not None:
+                        recording.kinectwise_start_params[kinect_id] = recording_info["start_params"]
         for recording_id, recording in self._recordings_database.items():
             if len(recordings_completeness_tracker[recording_id]) == 0:
                 recording.status = "Consistent"
