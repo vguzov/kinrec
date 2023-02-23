@@ -419,7 +419,7 @@ class MainController:
                 local_metadata = json.load(open(os.path.join(dirpath, "metadata.json")))
                 metadata = {k: local_metadata[k] for k in ["id", "name", "duration", "server_time",
                                                            "kinect_id", "participating_kinects",
-                                                           "kinect_calibration"]}
+                                                           "kinect_calibration", "start_params"]}
                 if with_size:
                     size = 0
                     for filename in essential_files[1:]:

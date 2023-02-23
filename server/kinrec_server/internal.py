@@ -120,6 +120,7 @@ class KinectCalibration:
     depth2color_R: np.ndarray
     color2depth_t: np.ndarray
     depth2color_t: np.ndarray
+    raw: str
 
     @classmethod
     def from_dict(cls, calib_dict):
@@ -129,7 +130,8 @@ class KinectCalibration:
                    color2depth_R=np.array(calib_dict["color2depth"]["R"]),
                    color2depth_t=np.array(calib_dict["color2depth"]["t"]),
                    depth2color_R=np.array(calib_dict["depth2color"]["R"]),
-                   depth2color_t=np.array(calib_dict["depth2color"]["t"]))
+                   depth2color_t=np.array(calib_dict["depth2color"]["t"]),
+                   raw=calib_dict["raw"])
         return self
 
     def to_dict(self, with_opencv=True):
@@ -138,7 +140,8 @@ class KinectCalibration:
                       "color2depth": {"R": self.color2depth_R.tolist(),
                                       "t": self.color2depth_t.tolist()},
                       "depth2color": {"R": self.depth2color_R.tolist(),
-                                      "t": self.depth2color_t.tolist()}}
+                                      "t": self.depth2color_t.tolist()},
+                      "raw": self.raw}
         return calib_dict
 
 
