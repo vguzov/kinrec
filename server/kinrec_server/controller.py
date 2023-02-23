@@ -39,7 +39,7 @@ class KinRecController:
         self._params_applied_responses = {}
         self._recordings_database: Dict[int, RecordsEntry] = {}
         self._recorder_reclist_responses = {}
-        self._sync_capture_delay = 160  # in nanoseconds
+        self._sync_capture_delay = 160  # in microseconds
         self._master_recorder = None
         self._curr_recording_participating_kinects = None
         self._curr_recording_started_ids: Optional[set] = None

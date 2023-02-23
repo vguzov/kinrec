@@ -104,6 +104,8 @@ class Kinect:
             raise Kinect.DoubleActivationException()
         kin = kinz.Kinect(resolution=resolution, wfov=wfov, binned=binned, framerate=fps, sync_mode=sync_mode,
                           sync_capture_delay=sync_capture_delay, imu_sensors=False)
+        self.start_params = dict(resolution=resolution, wfov=wfov, binned=binned, framerate=fps, sync_mode=sync_mode,
+                          sync_capture_delay=sync_capture_delay, imu_sensors=False)
         self.device = kin
         self.active = True
         logger.info("Kinect initialized, getting frame to test")
@@ -114,6 +116,7 @@ class Kinect:
             self.active = False
             self.depth_calibration = None
             self.color_calibration = None
+            self.raw_calibration = None
             self.depth2pc_map = None
             kin.close()
             raise
@@ -159,10 +162,12 @@ class Kinect:
         color_data = self.device.get_color_data()
         depth_data = self.device.get_depth_data()
         color_ts = int(deepcopy(color_data.device_timestamp_usec))
+        system_color_ts = int(deepcopy(color_data.system_timestamp_nsec))
         depth_ts = int(deepcopy(depth_data.device_timestamp_usec))
+        system_depth_ts = int(deepcopy(depth_data.system_timestamp_nsec))
         color = np.array(color_data.buffer, copy=False)[:, :, 2::-1].copy()
         depth = np.array(depth_data.buffer, copy=True)
-        return color, depth, color_ts, depth_ts
+        return color, depth, color_ts, depth_ts, system_color_ts, system_depth_ts
 
     def update_calibration(self):
         if not self.active:
@@ -170,6 +175,7 @@ class Kinect:
         if self.color_calibration is None:
             self.depth_calibration = self.device.get_depth_calibration()
             self.color_calibration = self.device.get_color_calibration()
+            self.raw_calibration = self.device.get_raw_calibration()
             self.depth2pc_map = self.device.get_depth2pc_map()
             self._id = self.device.get_serial_number()
             self.depth2color_transform = {"R": self.device.get_depth2color_rotation_matrix().copy(),
@@ -224,7 +230,8 @@ class Kinect:
                 "depth": depth_calib_dict,
                 "color2depth": {k: v.tolist() for k, v in self.color2depth_transform.items()},
                 "depth2color": {k: v.tolist() for k, v in self.depth2color_transform.items()},
-                "params": self.params}
+                "params": self.params,
+                "raw": self.raw_calibration}
 
     @property
     def id(self) -> str:
@@ -256,6 +263,8 @@ class RecorderThread(Thread):
                              fps=self.kinect.fps, preset="ultrafast") as depth_writer:
             self.color_timestamps = []
             self.depth_timestamps = []
+            self.system_color_timestamps = []
+            self.system_depth_timestamps = []
             self.last_times = np.zeros(self.fps_window_size)
             if self.start_delay > 0:
                 logger.info(f"Waiting for {self.start_delay:.2f} seconds before starting")
@@ -265,7 +274,7 @@ class RecorderThread(Thread):
             logger.info("Recording started")
             while self.active:
                 try:
-                    color, depth, color_ts, depth_ts = self.kinect.get_next_frame()
+                    color, depth, color_ts, depth_ts, system_color_ts, system_depth_ts = self.kinect.get_next_frame()
                 except Kinect.FrameGetFailException as e:
                     self.active = False
                     self.exception = e
@@ -274,6 +283,8 @@ class RecorderThread(Thread):
                     depth_writer.write(depth)
                     self.color_timestamps.append(color_ts)
                     self.depth_timestamps.append(depth_ts)
+                    self.system_color_timestamps.append(system_color_ts)
+                    self.system_depth_timestamps.append(system_depth_ts)
                     self.last_times = np.roll(self.last_times, -1)
                     curr_time = time.time()
                     self.last_times[-1] = time.time()
@@ -327,7 +338,7 @@ class MainController:
                 img = img[::scale, ::scale]
             return img
 
-        color, depth, color_ts, depth_ts = self.kinect.get_next_frame()
+        color, depth, color_ts, depth_ts, system_color_ts, system_depth_ts = self.kinect.get_next_frame()
         if isinstance(color_scale, int):
             color = int_scale(color, color_scale)
         else:
@@ -362,7 +373,8 @@ class MainController:
         self.kinect.update_calibration()
         self.recording_metadata = {"id": recording_id, "name": recording_name, "server_time": server_time,
                                    "participating_kinects": list(participating_kinects),
-                                   "kinect_id": self.kinect.id, "kinect_calibration": self.kinect.calibration_dict}
+                                   "kinect_id": self.kinect.id, "kinect_calibration": self.kinect.calibration_dict,
+                                   "start_params": self.kinect.start_params}
         self.recorder = RecorderThread(self.kinect, curr_recording_dir, recording_duration, start_delay=start_delay)
         logger.info("Starting recorder thread")
         self.recorder.start_recording()
@@ -371,8 +383,10 @@ class MainController:
         logger.info("Finalizing the recording")
         logger.info("Waiting for recorder thread to finish")
         self.recorder.join()
-        logger.info("Writting timestamps and metadata")
-        timestamps = {"color": self.recorder.color_timestamps, "depth": self.recorder.depth_timestamps}
+        logger.info("Writing timestamps and metadata")
+        timestamps = {"color": self.recorder.color_timestamps, "depth": self.recorder.depth_timestamps,
+                      "system_color": self.recorder.system_color_timestamps,
+                      "system_depth": self.recorder.system_depth_timestamps}
         json.dump(timestamps, open(os.path.join(self.recorder.recording_dir, "times.json"), "w"), indent=0)
         if new_server_time is None:
             self.recording_metadata["duration"] = self.recorder.expected_timelen

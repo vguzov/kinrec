@@ -17,11 +17,11 @@ class RecorderState:
 
 @dataclass
 class KinectParams:
-    rgb_res: int = 1440
+    rgb_res: int = 1536
     depth_wfov: bool = False
     depth_binned: bool = False
     fps: int = 30
-    sync: bool = False
+    sync: bool = True
     sync_master_id: Optional[str] = None
 
     @classmethod
