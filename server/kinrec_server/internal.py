@@ -131,7 +131,7 @@ class KinectCalibration:
                    color2depth_t=np.array(calib_dict["color2depth"]["t"]),
                    depth2color_R=np.array(calib_dict["depth2color"]["R"]),
                    depth2color_t=np.array(calib_dict["depth2color"]["t"]),
-                   raw=calib_dict["raw"])
+                   raw=calib_dict.get("raw", None))
         return self
 
     def to_dict(self, with_opencv=True):
