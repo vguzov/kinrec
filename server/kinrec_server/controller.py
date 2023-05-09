@@ -134,9 +134,23 @@ class KinRecController:
             # Delay is only applied to the master recorder, others will wait for the master to start
             if master_recorder_id is None or recorder_id == master_recorder_id:
                 delay = start_delay
-            routines.append(recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
+            else:
+                delay = 0
+            #TODO: remove this if statement once protocol is fixed
+            if master_recorder_id is not None and recorder_id != master_recorder_id:
+                routines.append(recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
                                                      participating_kinects, delay))
-        await asyncio.gather(*routines)
+            # routines.append(recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
+            #                                          participating_kinects, delay))
+        #TODO: remove this if statement once protocol is fixed
+        if master_recorder_id is not None:
+            await asyncio.gather(*routines)
+            await asyncio.sleep(10)
+            recorder = self._connected_recorders[master_recorder_id]
+            await recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
+                                                     participating_kinects, start_delay)
+        else:
+            await asyncio.gather(*routines)
 
     def _clear_from_last_recording(self):
         self._curr_recording_participating_kinects = None
