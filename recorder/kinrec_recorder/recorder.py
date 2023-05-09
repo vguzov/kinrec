@@ -83,6 +83,7 @@ class Kinect:
     def __init__(self):
         self.device = None
         self.init_frame_timeout = 5.
+        self.subordinate_init_frame_timeout = 100.
         self.regular_frame_timeout = 1 / 10.
         self.update_params()
         self.depth_calibration = None
@@ -110,7 +111,11 @@ class Kinect:
         self.active = True
         logger.info("Kinect initialized, getting frame to test")
         try:
-            self._get_next_frame(self.init_frame_timeout)
+            # TODO: make subordinate_init_frame_timeout dynamic, depending on a master delay time
+            if sync_mode == "subordinate":
+                self._get_next_frame(self.subordinate_init_frame_timeout)
+            else:
+                self._get_next_frame(self.init_frame_timeout)
         except Kinect.FrameGetFailException:
             self.device = None
             self.active = False
