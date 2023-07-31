@@ -30,7 +30,7 @@ class KinRecApp(tk.Tk):
         self._loop_sleep = 1 / 30.
         self._status_update_period = status_update_period
         self.protocol("WM_DELETE_WINDOW", self._on_quit)
-        self.minsize(300, 400)
+        self._default_size = (420, 260 + 50 * number_of_kinects)
 
         os.makedirs(self._workdir, exist_ok=True)
         params_path = os.path.join(self._workdir, "params.toml")
@@ -51,6 +51,10 @@ class KinRecApp(tk.Tk):
         self.view = KinRecView(parent=self, number_of_kinects=number_of_kinects)
         self.view.set_controller(self.controller)
         self.controller.set_view(self.view)
+
+        # default size
+        self.minsize(*self._default_size)
+        self.geometry("{}x{}".format(*self._default_size))
 
     def start(self):
         self._loop_active = True

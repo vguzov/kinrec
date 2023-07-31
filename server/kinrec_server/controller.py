@@ -159,9 +159,9 @@ class KinRecController:
         self._curr_recording_stopped_ids = None
 
     def _compile_recordings_list(self, recorderwise_reclists: Dict[int, dict]):
-        recordings_completeness_tracker = {}
-        self._recordings_database = {}
-        self._recorderwise_reclists = {}
+        recordings_completeness_tracker = dict()
+        self._recordings_database = dict()
+        self._recorderwise_reclists = dict()
         for recorder_id, recordings_dict in recorderwise_reclists.items():
             self._recorderwise_reclists[recorder_id] = {}
             for recording_id, recording_info in recordings_dict.items():
@@ -245,6 +245,7 @@ class KinRecController:
             logger.info(f"Deleting recording {rec_id} from kinects")
             recording = self._recordings_database[rec_id]
             participating_kinects = set(recording.participating_kinects)
+            # TODO look into the actual recorders with this recording saved
             for recorder_id, recorder in self._connected_recorders.items():
                 if recorder.kinect_id in participating_kinects:
                     curr_routines.append(recorder.delete_recording(rec_id))

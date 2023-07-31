@@ -1,3 +1,4 @@
+import math
 from functools import partial
 import logging
 import sys
@@ -20,6 +21,8 @@ class KinRecView(ttk.Frame):
         self._preview_frame_size = (800, 400)
         self.parent = parent
         self.pack(fill="both", expand=True)
+        self.columnconfigure(2, weight=1)  # 2 is the column with the RecordsBrowser
+        self.rowconfigure((1,2), weight=1)  # Make RecordsBrowser resizable
         self._controller = None
         self.number_of_kinects = number_of_kinects
 
@@ -32,7 +35,7 @@ class KinRecView(ttk.Frame):
             "label": None
         } for _ in range(self.number_of_kinects)]
         self._state_server = "offline"
-        self._params_kinect: KinectParams = KinectParams()
+        self.kinect_params: KinectParams = KinectParams()
 
         # Initialize variables
         self._init_view_state()
@@ -44,9 +47,10 @@ class KinRecView(ttk.Frame):
         self._add_top_bar_menu()
         self._add_preview_frame()
         self._add_records_browser_frame()
-        self._add_params_frame()
-        self._add_recording_frame()
-        self._add_state_frame()
+        self._add_left_column_frame()
+        self._add_params_frame(parent=self.left_column_frame)
+        self._add_recording_frame(parent=self.left_column_frame)
+        self._add_state_frame(parent=self.left_column_frame)
 
         # # Pre-defined constants
         # self.RET_CODE_EXIT, self.RET_CODE_OK, self.RET_CODE_ERROR = -1, 0, 1
@@ -67,13 +71,14 @@ class KinRecView(ttk.Frame):
         # ]
         #
         # self.window = sg.Window("Kinect Recorder GUI", self.layout, resizable=True)
-
+        self._browser_size = (1000, 300 + self.number_of_kinects * 50)
+        
     def _init_view_state(self):
         self.state = {
             "kinect": {
-                "rgb_res": tk.StringVar(value=list(self._params_kinect._rgb_res_str2val)[0]),
-                "depth_mode": tk.StringVar(value=list(self._params_kinect._depth_mode_str2val)[0]),
-                "fps": tk.IntVar(value=self._params_kinect._fps_range[0]),
+                "rgb_res": tk.StringVar(value=list(self.kinect_params._rgb_res_str2val)[0]),
+                "depth_mode": tk.StringVar(value=list(self.kinect_params._depth_mode_str2val)[0]),
+                "fps": tk.IntVar(value=self.kinect_params._fps_range[0]),
                 "sync": tk.BooleanVar(value=False),
             },
             "recording": {
@@ -86,7 +91,6 @@ class KinRecView(ttk.Frame):
             },
             "recordings_list": {
                 "is_on": tk.BooleanVar(value=False),
-                "checkboxes": dict()
             },
             "preview": {
                 "is_on": tk.BooleanVar(value=False),
@@ -128,81 +132,75 @@ class KinRecView(ttk.Frame):
         self.preview_frame.grid_remove()
 
     def _add_records_browser_frame(self):
+        # Local function for sorting the treeview column-wise
+        def _browser_sort_column(treeview, column, reverse):
+            l = [(treeview.set(k, column), k) for k in treeview.get_children('')]
+            l.sort(reverse=reverse)
+
+            # rearrange items in sorted positions
+            for index, (val, k) in enumerate(l):
+                treeview.move(k, '', index)
+
+            # reverse sort next time
+            treeview.heading(
+                column, command=lambda _column=column: \
+                _browser_sort_column(treeview, _column, not reverse)
+            )
+        
+        # Main frame that holds everything
         self.browser_frame = FocusLabelFrame(self, text="Browse recordings")
-        self.browser_frame.rowconfigure(0, weight=1)
+        self.browser_frame.rowconfigure((0, 1), weight=1)
         self.browser_frame.columnconfigure(0, weight=1)
 
-        # Subframe with records list and scrollbar
-        # subframe creation
-        browser_records_subframe = FocusLabelFrame(self.browser_frame, text="List")
-        self.browser_records_subframe = browser_records_subframe
-        browser_records_subframe.grid_rowconfigure(0, weight=1)
-        browser_records_subframe.grid_columnconfigure(0, weight=1)
-        browser_records_subframe.grid_propagate(False)
-        browser_records_subframe.grid(row=0, column=0, padx=5, pady=5)
-        # canvas that holds records subsubframe and scrollbar
-        self.browser_records_canvas = tk.Canvas(browser_records_subframe)
-        browser_records_canvas = self.browser_records_canvas
-        # subsubframe
-        self.browser_records_subsubframe = FocusLabelFrame(browser_records_canvas, bg="white")
-        # scrollbar
-        self.browser_records_scrollbar = tk.Scrollbar(
-            browser_records_subframe, orient="vertical", command=browser_records_canvas.yview
-        )
-        browser_records_canvas.configure(yscrollcommand=self.browser_records_scrollbar.set)
+        # Create TreeView with vertical Scrollbar
+        # TODO add params?
+        columns = ["date", "name", "length", "size", "status"]
+        self.browser_frame_tree = ttk.Treeview(self.browser_frame, show="headings", columns=columns)
+        vsb = ttk.Scrollbar(self.browser_frame, orient="vertical", command=self.browser_frame_tree.yview)
+        self.browser_frame_tree.configure(yscrollcommand=vsb.set)
+        self.browser_frame_tree.grid(row=0, rowspan=2, column=0, sticky='news', padx=5, pady=5)
+        vsb.grid(row=0, rowspan=2, column=1, sticky='nws', pady=5)
 
-        # pack
-        self.browser_records_scrollbar.pack(side="right", fill="y")
-        browser_records_canvas.pack(side="left", fill="both", expand=True)
-        browser_records_canvas.create_window((4, 4), window=self.browser_records_subsubframe, anchor='nw')
-        self.browser_records_subsubframe.bind(
-            "<Configure>",
-            lambda event, canvas=browser_records_canvas: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        # header for records list in subsubframe
-        self.browser_records_database = dict()
-        header = [
-            tk.Label(self.browser_records_subsubframe, text="Collect?"),
-            tk.Label(self.browser_records_subsubframe, text="Date"),
-            tk.Label(self.browser_records_subsubframe, text="Name"),
-            tk.Label(self.browser_records_subsubframe, text="Length"),
-            tk.Label(self.browser_records_subsubframe, text="Params"),
-            tk.Label(self.browser_records_subsubframe, text="Size"),
-            tk.Label(self.browser_records_subsubframe, text="Status")
-        ]
-        for index, label in enumerate(header):
-            label.grid(row=0, column=index, padx=2, sticky='news')
-        self.browser_records_database[-1] = header
+        # Set initial column widths
+        self.browser_frame_tree.column("date", width=120)
+        self.browser_frame_tree.column("name", width=100)
+        self.browser_frame_tree.column("length", width=70)
+        self.browser_frame_tree.column("size", width=50)
+        self.browser_frame_tree.column("status", width=70)
 
-        # resize canvas to fit everything
-        self.browser_records_subsubframe.update_idletasks()
-        _width = 1.2 * sum([header[j].winfo_width() for j in range(len(header))])
-        _height = 25 * header[0].winfo_height()
-        browser_records_canvas.config(width=_width + self.browser_records_scrollbar.winfo_width(), height=_height)
-
-
+        # Add sorting to columns
+        for column in columns:
+            self.browser_frame_tree.heading(
+                column, text=column.capitalize(), command=lambda _column=column: \
+                _browser_sort_column(self.browser_frame_tree, _column, False)
+            )
+        
         # Subframe with download button and progressbar
         browser_progress_subframe = FocusLabelFrame(self.browser_frame, text="Collection")
-        browser_progress_subframe.grid(row=1, column=0)
+        browser_progress_subframe.grid(row=2, column=0, columnspan=2, sticky="ns")
         FocusButton(browser_progress_subframe, text='Collect!', width=7,
                     command=self._callback_records_collect).grid(row=0, column=0, padx=5, pady=5)
         FocusButton(browser_progress_subframe, text='Delete', width=7,
                     command=self._callback_records_verify_delete).grid(row=0, column=1, padx=5, pady=5)
 
-        self.browser_frame.grid(row=1, rowspan=3, column=2, sticky="ne", padx=5, pady=5)
+        self.browser_frame.grid(row=1, rowspan=2, column=2, sticky="news", padx=5, pady=5)
         self.browser_frame.grid_remove()
 
-    def _add_params_frame(self):
-        self.params_frame = FocusLabelFrame(self, text="Recording parameters")
-        self.params_frame.grid(row=1, column=1, padx=5, pady=5, sticky='e')
-        # self.params_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+    def _add_left_column_frame(self):
+        self.left_column_frame = FocusLabelFrame(self, borderwidth=0)
+        self.left_column_frame.grid(row=1, column=0, sticky="n")
+
+
+    def _add_params_frame(self, parent):
+        self.params_frame = FocusLabelFrame(parent, text="Recording parameters")
+        self.params_frame.grid(row=0, column=0, padx=5, pady=5, sticky='n')
         root = self.params_frame
 
         self.params_frame_fields = []
         # Row 0
         tk.Label(root, text="RGB resolution (H x W)").grid(row=0, column=0, columnspan=2, padx=5, pady=1, sticky='w')
         menu = tk.OptionMenu(root, self.state["kinect"]["rgb_res"],
-                             *list(self._params_kinect._rgb_res_str2val), command=self._callback_rgb_res)
+                             *list(self.kinect_params._rgb_res_str2val), command=self._callback_rgb_res)
         menu.config(width=12)
         menu.grid(row=0, column=2, padx=5, sticky='e')
         self.apply_params_button = FocusButton(root, text='Apply', width=10, style="KinectParams_Apply.TButton",
@@ -211,22 +209,22 @@ class KinRecView(ttk.Frame):
         # Row 1
         tk.Label(root, text="Depth mode").grid(row=1, column=0, columnspan=1, padx=5, pady=1, sticky='w')
         menu = tk.OptionMenu(root, self.state["kinect"]["depth_mode"],
-                             *list(self._params_kinect._depth_mode_str2val), command=self._callback_depth_mode)
+                             *list(self.kinect_params._depth_mode_str2val), command=self._callback_depth_mode)
         menu.config(width=25)
         menu.grid(row=1, column=1, columnspan=2, padx=5, sticky='e')
         # Row 2
         tk.Label(root, text="FPS").grid(row=2, column=0, padx=5, pady=1, sticky='w')
         menu = tk.OptionMenu(root, self.state["kinect"]["fps"],
-                             *list(self._params_kinect._fps_range), command=self._callback_fps)
+                             *list(self.kinect_params._fps_range), command=self._callback_fps)
         menu.config(width=3)
         menu.grid(row=2, column=1, padx=5, sticky='w')
         FocusCheckButton(root, text=' Synchronize', command=self._callback_sync,
                          variable=self.state['kinect']['sync']).grid(row=2, column=2, padx=5, sticky='e')
 
     # TODO change entries to BoundedNumericalEntry
-    def _add_recording_frame(self):
-        self.recording_frame = FocusLabelFrame(self, text="Recording")
-        self.recording_frame.grid(row=2, column=1, padx=5, pady=5)
+    def _add_recording_frame(self, parent):
+        self.recording_frame = FocusLabelFrame(parent, text="Recording")
+        self.recording_frame.grid(row=1, column=0, sticky='n', padx=5, pady=5)
         root = self.recording_frame
 
         # Row 0
@@ -257,9 +255,9 @@ class KinRecView(ttk.Frame):
         )
         self.recording_browse_button.grid(row=2, rowspan=2, column=4, padx=5, pady=5)
 
-    def _add_state_frame(self):
-        self.state_frame = FocusLabelFrame(self, text="State")
-        self.state_frame.grid(row=3, column=1, padx=5, pady=5)
+    def _add_state_frame(self, parent):
+        self.state_frame = FocusLabelFrame(parent, text="State")
+        self.state_frame.grid(row=2, column=0, sticky='n', padx=5, pady=5)
         # self.state_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         root = self.state_frame
         root.grid_columnconfigure(0, weight=1)
@@ -289,26 +287,6 @@ class KinRecView(ttk.Frame):
             self._recorders[recorder_index]["label"].grid(row=3 + recorder_index, column=2, padx=10, pady=1, sticky='w')
 
             self.update_recorder_state(recorder_index, self._recorders[recorder_index]["state"])
-
-    def add_records_browser_row(self, id: int, entry: RecordsEntry):
-        # create variable for checkbox
-        self.state["recordings_list"]["checkboxes"][id] = tk.BooleanVar(value=False)
-
-        date_str = datetime.fromtimestamp(entry.date).strftime("%d.%m.%Y, %H:%M")
-        time_str = timedelta(seconds=entry.length)
-        params_str = "\n".join([f"{k}: {v}" for k, v in entry.params.to_dict().items()])
-        row = [
-            FocusCheckButton(self.browser_records_subsubframe, text="",
-                             command=partial(self._callback_select_recording, id),
-                             variable=self.state["recordings_list"]["checkboxes"][id]),
-            tk.Label(self.browser_records_subsubframe, text=f"{date_str}"),
-            tk.Label(self.browser_records_subsubframe, text=f"{entry.name}"),
-            tk.Label(self.browser_records_subsubframe, text=f"{time_str}"),
-            tk.Label(self.browser_records_subsubframe, text=f"{params_str}"),
-            tk.Label(self.browser_records_subsubframe, text=f"{entry.size/2**20:6.1f}"),
-            tk.Label(self.browser_records_subsubframe, text=f"{entry.status}")
-        ]
-        return row
 
     @staticmethod
     def add_destroyable_message(type, text, duration=2000):
@@ -415,21 +393,20 @@ class KinRecView(ttk.Frame):
         ))
 
     # TODO rename to apply_kinect_params_reply
-    # TODO change params to kinect_params elsewhere
     # TODO add freeze and unfreeze via params
     def params_apply_finalize(self, result: bool):
         if result:
             # save new default kinect parameters
-            self._params_kinect = self._get_kinect_params_from_view()
+            self.kinect_params = self._get_kinect_params_from_view()
             # self.add_destroyable_message("info", "Kinect params applied successfully!")
         else:
             # update params to previous values
-            self._update_kinect_params_view(self._params_kinect)
+            self._update_kinect_params_view(self.kinect_params)
             self.add_destroyable_message("warning", "Kinect params were NOT applied!")
         self._update_apply_button_state(state="applied")
 
     def kinect_params_init(self, params: KinectParams):
-        self._params_kinect = params
+        self.kinect_params = params
         self._update_kinect_params_view(params)
 
     def start_recording_reply(self, is_successful=True):
@@ -455,21 +432,21 @@ class KinRecView(ttk.Frame):
         # Change button style
         self._update_recording_button_state(state="not recording")
 
-    def browse_recordings_reply(self, recordings_database: Dict[int, RecordsEntry]):
-        max_width = -1
-
+    def browse_recordings_reply(self, recordings_database: Dict[int, RecordsEntry]):        
         for index, (recording_id, recording) in enumerate(recordings_database.items()):
-            row = self.add_records_browser_row(recording_id, recording)
-            width = 0
-            for column, widget in enumerate(row):
-                widget.grid(row=index+1, column=column, padx=2, sticky='news')
-                widget.update()
-                width += widget.winfo_width()
-            max_width = max(max_width, 1.1 * width)
-            self.browser_records_database[recording_id] = row
+            date_str = datetime.fromtimestamp(recording.date).strftime("%Y-%m-%d, %H:%M")
+            if recording.length < 0:
+                length_str = "N/A"
+            else:
+                length_str = timedelta(seconds=recording.length)
+                length_str = timedelta(seconds=math.ceil(length_str.total_seconds()))
+            params_str = "\n".join([f"{k}: {v}" for k, v in recording.params.to_dict().items()])
+            size_str = f"{recording.size/2**20:6.1f} MB"
 
-        # adjust width
-        self.browser_records_canvas.config(width=max_width + self.browser_records_scrollbar.winfo_width())
+            self.browser_frame_tree.insert(
+                "", "end", iid=str(recording_id),
+                values=(date_str, recording.name, length_str, size_str, recording.status)
+            )
     # ==================================================================================================================
 
     # ================================================ Button callbacks ================================================
@@ -484,18 +461,16 @@ class KinRecView(ttk.Frame):
             self.browser_frame.grid_remove()
             self.recording_browse_button.configure(text="Browse\nrecordings")
             # cleaning of old database
-            for recording_id, row in self.browser_records_database.items():
-                # except for header
-                if recording_id != -1:
-                    for widget in row:
-                        widget.destroy()
-            self.state["recordings_list"]["checkboxes"] = {}
+            self.browser_frame_tree.delete(*self.browser_frame_tree.get_children())
+            # restore initial size
+            self.parent.geometry("{}x{}".format(*self.parent._default_size))
         else:
             self.state["recordings_list"]["is_on"].set(True)
             self.browser_frame.grid()
             self.recording_browse_button.configure(text="Close\nbrowser")
             # TODO move to a separate button
             self._controller.collect_recordings_info()
+            self.parent.geometry("{}x{}".format(*self._browser_size))
 
     def _callback_rgb_res(self, *args):
         self._update_apply_button_state(state="not applied")
@@ -531,26 +506,35 @@ class KinRecView(ttk.Frame):
 
             self._controller.start_recording(name, duration, delay)
 
-    def _callback_select_recording(self, recording_id: int):
-        pass
-
     def _callback_records_collect(self):
-        recording_ids_to_collect = []
-        for recording_id, variable in self.state["recordings_list"]["checkboxes"].items():
-            if variable.get():
-                recording_ids_to_collect.append(recording_id)
-        self._controller.collect_recordings(recording_ids_to_collect)
+        recording_ids_to_collect = list(self.browser_frame_tree.selection())
+        recording_ids_to_collect = [int(i) for i in recording_ids_to_collect]
+
+        if len(recording_ids_to_collect) == 0:
+           self.add_destroyable_message("Warning", "No recordings selected")
+        else:
+            self._controller.collect_recordings(recording_ids_to_collect)
 
     def _callback_records_verify_delete(self):
-        # TODO: make a window with a confirmation before deleting
-        self._callback_records_delete()
-
-    def _callback_records_delete(self):
-        recording_ids_to_delete = []
-        for recording_id, variable in self.state["recordings_list"]["checkboxes"].items():
-            if variable.get():
-                recording_ids_to_delete.append(recording_id)
-        self._controller.delete_recordings(recording_ids_to_delete)
+        recording_ids_to_delete = list(self.browser_frame_tree.selection())
+        recording_ids_to_delete = [int(i) for i in recording_ids_to_delete]
+        n_recordings = len(recording_ids_to_delete)
+        
+        if n_recordings == 0:
+            self.add_destroyable_message("Warning", "No recordings selected")
+        else:
+            msg_box = tk.messagebox.askquestion(
+                'Records deletion', 
+                f'Are you sure you want to delete the selected {n_recordings} recording(-s)?',
+                icon='warning'
+            )
+            if msg_box == 'yes':
+                self._controller.delete_recordings(recording_ids_to_delete)
+                # update list after deletion
+                self.browser_frame_tree.delete(*self.browser_frame_tree.get_children())
+                self._controller.collect_recordings_info()
+            else:
+                pass
 
     def _callback_about(self):
         self.menubar.focus_set()
@@ -578,15 +562,15 @@ class KinRecView(ttk.Frame):
     # ==================================================================================================================
 
     def _update_kinect_params_view(self, params: KinectParams):
-        self.state["kinect"]["rgb_res"].set(value=self._params_kinect._rgb_res_val2str[params.rgb_res])
-        self.state["kinect"]["depth_mode"].set(value=self._params_kinect._depth_mode_val2str[(params.depth_wfov , params.depth_binned)])
+        self.state["kinect"]["rgb_res"].set(value=self.kinect_params._rgb_res_val2str[params.rgb_res])
+        self.state["kinect"]["depth_mode"].set(value=self.kinect_params._depth_mode_val2str[(params.depth_wfov , params.depth_binned)])
         self.state["kinect"]["fps"].set(value=params.fps)
         self.state["kinect"]["sync"].set(value=params.sync)
 
     def _get_kinect_params_from_view(self):
         params_state = self.state["kinect"]
-        rgb_res = self._params_kinect._rgb_res_str2val[params_state["rgb_res"].get()]
-        wfov, binned = self._params_kinect._depth_mode_str2val[params_state["depth_mode"].get()]
+        rgb_res = self.kinect_params._rgb_res_str2val[params_state["rgb_res"].get()]
+        wfov, binned = self.kinect_params._depth_mode_str2val[params_state["depth_mode"].get()]
         fps = params_state["fps"].get()
         sync = params_state["sync"].get()
         return KinectParams(rgb_res=rgb_res, depth_wfov=wfov, depth_binned=binned, fps=fps, sync=sync)
