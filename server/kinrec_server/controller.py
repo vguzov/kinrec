@@ -33,6 +33,8 @@ class KinRecController:
         self._preview_fps = preview_fps
         self._preview_frame_received = asyncio.Event()
         self._preview_frame_received.set()
+        self._recording_initialized_event = asyncio.Event()
+        self._recording_initialized_success = False
         self._depth_cm = matplotlib.cm.get_cmap('jet')
         self._depth_preview_thresh = 5000.
         self._last_kinect_params = KinectParams()
@@ -42,6 +44,8 @@ class KinRecController:
         self._sync_capture_delay = 160  # in microseconds
         self._master_recorder = None
         self._curr_recording_participating_kinects = None
+        self._curr_recording_initialize_candidates_ids = None
+        self._curr_recording_initialized_ids: Optional[set] = None
         self._curr_recording_started_ids: Optional[set] = None
         self._curr_recording_stopped_ids: Optional[set] = None
         self._curr_state = "idle"
@@ -61,6 +65,7 @@ class KinRecController:
             depth_scale: Optional[int] = 1):
         self._preview_loop_active[recorder_id] = True
         recorder = self._connected_recorders[recorder_id]
+        await self._apply_last_kinect_params(ignore_sync=True)
         await recorder.start_preview()
         while self._preview_loop_active[recorder_id]:
             await self._preview_frame_received.wait()
@@ -86,7 +91,7 @@ class KinRecController:
             recorder_ids = np.array(recorder_ids)[recorder_aliases_sort_order]
             return recorder_ids
 
-    async def _apply_last_kinect_params(self, ignore_sync=True):
+    async def _apply_last_kinect_params(self, ignore_sync=True, force_reinit=False):
         kinect_params = self._last_kinect_params
         will_sync = kinect_params.sync and not ignore_sync
         if will_sync:
@@ -111,11 +116,28 @@ class KinRecController:
                 self._params_applied_responses[recorder_id] = None
                 routines.append(recorder.set_kinect_params(kinect_params.rgb_res, kinect_params.depth_wfov,
                                                            kinect_params.depth_binned,
-                                                           kinect_params.fps, sync_mode, recorder_sync_delay))
+                                                           kinect_params.fps, sync_mode, recorder_sync_delay, force_reinit))
             await asyncio.gather(*routines)
             return master_recorder if will_sync else None
         else:
             return None
+
+    async def _initialize_recording_on_selected_kinects(self, recorder_ids: Sequence[int],
+            recording_id, recording_name, recording_duration,
+            participating_kinects, delay):
+        routines = []
+        self._curr_recording_initialize_candidates_ids = set()
+        for recorder_id in recorder_ids:
+            recorder = self._connected_recorders[recorder_id]
+            self._curr_recording_initialize_candidates_ids.add(recorder_id)
+            routines.append(recorder.init_recording(recording_id, recording_name, recording_duration, participating_kinects, delay))
+        self._curr_recording_initialized_ids = set()
+        self._recording_initialized_success = False
+        self._recording_initialized_event.clear()
+        await asyncio.gather(*routines)
+        # Waiting for all devices to finish initialization before sending the result
+        await self._recording_initialized_event.wait()
+        return self._recording_initialized_success
 
     async def _start_recording(self, recording_name: str, recording_duration: float, start_delay: float):
         participating_recorders = self._sort_recorders()
@@ -126,35 +148,38 @@ class KinRecController:
             raise KinectNotReadyException("Could not get a kinect id from one of the recorders")
         self._curr_recording_participating_kinects = set(participating_recorders)
         master_recorder_id = await self._apply_last_kinect_params(ignore_sync=False)
-        server_time = time.time()
-        recording_id = int(server_time * 1000)  # recording_id is a start time in ms
-        routines = []
+        recording_id = int(time.time() * 1000)  # recording_id is a start time in ms
+        # Preparing devices for recording
+        logger.info(f"Starting {'synced' if master_recorder_id is not None else 'ASYNCED'} recording")
+        initialized_recorders = []
         for recorder_id, recorder in self._connected_recorders.items():
             # delay = start_delay
             # Delay is only applied to the master recorder, others will wait for the master to start
-            if master_recorder_id is None or recorder_id == master_recorder_id:
-                delay = start_delay
-            else:
-                delay = 0
-            #TODO: remove this if statement once protocol is fixed
-            if master_recorder_id is not None and recorder_id != master_recorder_id:
-                routines.append(recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
-                                                     participating_kinects, delay))
-            # routines.append(recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
-            #                                          participating_kinects, delay))
-        #TODO: remove this if statement once protocol is fixed
+            if master_recorder_id is None or recorder_id != master_recorder_id:
+                initialized_recorders.append(recorder_id)
+
+        init_result = await self._initialize_recording_on_selected_kinects(initialized_recorders, recording_id, recording_name, recording_duration,
+                                                                           participating_kinects, start_delay)
+        if not init_result:
+            raise RecorderDisconnectedException("Failed to initialize the recording")
         if master_recorder_id is not None:
-            await asyncio.gather(*routines)
-            await asyncio.sleep(10)
-            recorder = self._connected_recorders[master_recorder_id]
-            await recorder.start_recording(recording_id, recording_name, recording_duration, server_time,
-                                                     participating_kinects, start_delay)
-        else:
-            await asyncio.gather(*routines)
+            logger.info("Subordinate recorders initialized, initializing the master recorder")
+            init_result = await self._initialize_recording_on_selected_kinects([master_recorder_id], recording_id, recording_name, recording_duration,
+                                                                               participating_kinects, start_delay)
+            if not init_result:
+                raise RecorderDisconnectedException("Failed to initialize the recording")
+        logger.info("All recorders initialized, starting the recording")
+        # Starting recording
+        routines = []
+        server_time = time.time()
+        for recorder_id, recorder in self._connected_recorders.items():
+            routines.append(recorder.start_recording(server_time))
+        await asyncio.gather(*routines)
 
     def _clear_from_last_recording(self):
         self._curr_recording_participating_kinects = None
         self._master_recorder = None
+        self._curr_recording_initialized_ids = None
         self._curr_recording_started_ids = None
         self._curr_recording_stopped_ids = None
 
@@ -269,6 +294,7 @@ class KinRecController:
         return True
 
     def start_recording(self, recording_name: str, recording_duration: float = None, start_delay: float = 10.):
+        self._curr_recording_initialized_ids = set()
         self._curr_recording_started_ids = set()
         self._curr_state = "recording"
         asyncio.create_task(self._start_recording(recording_name, recording_duration, start_delay))
@@ -319,6 +345,7 @@ class KinRecController:
     async def add_recorder(self, recorder: RecorderComm, recorder_id: int):
         assert recorder_id not in self._connected_recorders
         self._connected_recorders[recorder_id] = recorder
+        # await self._apply_last_kinect_params(ignore_sync=False)
         await recorder.get_kinect_calibration()
         current_params = self._last_kinect_params
         await recorder.set_kinect_params(current_params.rgb_res, current_params.depth_wfov,
@@ -397,6 +424,21 @@ class KinRecController:
         if not reply_result:
             kin_alias = self.kinect_alias_from_recorder(recorder_id)
             logger.warning(f"Recorder {recorder_id}:{kin_alias} Preview failed to stop, more info: {info}")
+
+    def comm_init_recording_reply(self, recorder_id: int, reply_result: bool, info: str = None):
+        if reply_result:
+            self._curr_recording_initialized_ids.add(recorder_id)
+        else:
+            kin_alias = self.kinect_alias_from_recorder(recorder_id)
+            logger.warning(f"Recorder {recorder_id}:{kin_alias} Recording failed to initialize, more info: {info}")
+            self._recording_initialized_success = False
+            self._recording_initialized_event.set()
+            self.stop_recording()
+            self._view.start_recording_reply(False)
+        if self._curr_recording_initialized_ids == self._curr_recording_initialize_candidates_ids:
+            self._curr_recording_stopped_ids = set()
+            self._recording_initialized_success = True
+            self._recording_initialized_event.set()
 
     def comm_start_recording_reply(self, recorder_id: int, reply_result: bool, info: str = None):
         if reply_result:
@@ -486,7 +528,7 @@ class KinRecController:
         received_percent = self._recordings_received_size[file_rec_id] / self._recordings_database[
             file_rec_id].size * 100
         avg_speed = self._recordings_received_last_size[file_rec_id].sum() / (
-                    self._receive_speed_timeframe - 1 + np.modf(curr_timestamp)[0])
+                self._receive_speed_timeframe - 1 + np.modf(curr_timestamp)[0])
         logger.debug(f"Recording {file_rec_id}: received {self._recordings_received_size[file_rec_id] / 2 ** 20:.2f}MB/"
                      f"{self._recordings_database[file_rec_id].size / 2 ** 20:.2f}MB ({received_percent:.1f}%), "
                      f"(speed is {avg_speed / 2 ** 20:.2f} MB/s)")

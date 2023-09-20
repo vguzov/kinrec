@@ -63,6 +63,9 @@ class Kinect:
     class NotActivatedException(Exception):
         pass
 
+    class NotInitializedException(Exception):
+        pass
+
     _color_resolutions_dict = {
         720: (1280, 720),
         1080: (1920, 1080),
@@ -83,9 +86,9 @@ class Kinect:
     def __init__(self):
         self.device = None
         self.init_frame_timeout = 5.
-        self.subordinate_init_frame_timeout = 100.
+        self.subordinate_init_frame_timeout = 10.
         self.regular_frame_timeout = 1 / 10.
-        self.update_params()
+        self.params = None
         self.depth_calibration = None
         self.color_calibration = None
         self.depth2pc_map = None
@@ -93,38 +96,58 @@ class Kinect:
         self.color2depth_transform = None
         self._id = None
         self.active = False
+        self.update_params()
 
-    def update_params(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none", sync_capture_delay=0):
-        self.params = dict(resolution=resolution, wfov=wfov, binned=binned, fps=fps, sync_mode=sync_mode,
+    def update_params(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none", sync_capture_delay=0, force_reinit=False):
+        new_params = dict(resolution=resolution, wfov=wfov, binned=binned, fps=fps, sync_mode=sync_mode,
                            sync_capture_delay=sync_capture_delay)
-        self._color_resolution = self._color_resolutions_dict[resolution]
-        self._depth_resolution = self._depth_resolutions_dict[(wfov, binned)]
+        if self.params is None or new_params != self.params or force_reinit:
+            self.params = new_params
+            self._color_resolution = self._color_resolutions_dict[resolution]
+            self._depth_resolution = self._depth_resolutions_dict[(wfov, binned)]
+            self._reinitialize()
 
-    def _start(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none", sync_capture_delay=0):
-        if self.active:
+    def _device_init(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none", sync_capture_delay=0):
+        if self.device is not None:
             raise Kinect.DoubleActivationException()
         kin = kinz.Kinect(resolution=resolution, wfov=wfov, binned=binned, framerate=fps, sync_mode=sync_mode,
                           sync_capture_delay=sync_capture_delay, imu_sensors=False)
         self.start_params = dict(resolution=resolution, wfov=wfov, binned=binned, framerate=fps, sync_mode=sync_mode,
                           sync_capture_delay=sync_capture_delay, imu_sensors=False)
         self.device = kin
-        self.active = True
-        logger.info("Kinect initialized, getting frame to test")
-        try:
-            # TODO: make subordinate_init_frame_timeout dynamic, depending on a master delay time
-            if sync_mode == "subordinate":
-                self._get_next_frame(self.subordinate_init_frame_timeout)
+        self.active = False
+
+    def _camera_start(self):
+        if not self.active:
+            self.device.start_cameras()
+            if self.device.get_camera_activation_status():
+                self.active = True
+                logger.info("Kinect activated, getting frame to test")
+                try:
+                    if self.start_params['sync_mode'] != "subordinate":
+                        # We cannot test frame get for subordinate kinects, because they will not get frames until master starts
+                        self._get_next_frame(self.init_frame_timeout)
+                except Kinect.FrameGetFailException:
+                    self._camera_stop()
+                    # self.device.close()
+                    # self.device = None
+                    # self.active = False
+                    # self.depth_calibration = None
+                    # self.color_calibration = None
+                    # self.raw_calibration = None
+                    # self.depth2pc_map = None
+                    raise
             else:
-                self._get_next_frame(self.init_frame_timeout)
-        except Kinect.FrameGetFailException:
-            self.device = None
+                raise Kinect.NotActivatedException()
+        else:
+            raise Kinect.DoubleActivationException()
+
+    def _camera_stop(self):
+        if self.active:
+            self.device.stop_cameras()
             self.active = False
-            self.depth_calibration = None
-            self.color_calibration = None
-            self.raw_calibration = None
-            self.depth2pc_map = None
-            kin.close()
-            raise
+        else:
+            raise Kinect.NotActivatedException()
 
     @property
     def color_resolution(self) -> Tuple[int, int]:
@@ -138,11 +161,24 @@ class Kinect:
     def fps(self) -> float:
         return self.params["fps"]
 
-    def start(self):
-        self._start(**self.params)
+    def camera_start(self):
+        self._camera_start()
+
+    def camera_stop(self):
+        self._camera_stop()
+
+    def _reinitialize(self):
+        if self.initialized:
+            self.close()
+        self._device_init(**self.params)
 
     @property
-    def connected(self) -> bool:
+    def initialized(self) -> bool:
+        return self.device is not None
+
+
+    @property
+    def ready(self) -> bool:
         try:
             self.device.get_serial_number()
         except Exception as e:
@@ -166,17 +202,18 @@ class Kinect:
                 time.sleep(retry_period)
         color_data = self.device.get_color_data()
         depth_data = self.device.get_depth_data()
+        system_frame_ts = int(deepcopy(self.device.get_last_frameget_timestamp_usec()))
         color_ts = int(deepcopy(color_data.device_timestamp_usec))
         system_color_ts = int(deepcopy(color_data.system_timestamp_nsec))
         depth_ts = int(deepcopy(depth_data.device_timestamp_usec))
         system_depth_ts = int(deepcopy(depth_data.system_timestamp_nsec))
         color = np.array(color_data.buffer, copy=False)[:, :, 2::-1].copy()
         depth = np.array(depth_data.buffer, copy=True)
-        return color, depth, color_ts, depth_ts, system_color_ts, system_depth_ts
+        return color, depth, color_ts, depth_ts, system_color_ts, system_depth_ts, system_frame_ts
 
     def update_calibration(self):
-        if not self.active:
-            raise Kinect.NotActivatedException()
+        if not self.initialized:
+            raise Kinect.NotInitializedException()
         if self.color_calibration is None:
             self.depth_calibration = self.device.get_depth_calibration()
             self.color_calibration = self.device.get_color_calibration()
@@ -188,12 +225,11 @@ class Kinect:
             self.color2depth_transform = {"R": self.device.get_color2depth_rotation_matrix().copy(),
                                           "t": (self.device.get_color2depth_translation_vector()[:, 0] / 1000.).copy()}
 
-    def stop(self):
-        if not self.active:
-            raise Kinect.NotActivatedException()
+    def close(self):
+        if self.active:
+            self.camera_stop()
         self.device.close()
         self.device = None
-        self.active = False
         self.depth_calibration = None
         self.color_calibration = None
         self.depth2pc_map = None
@@ -253,6 +289,7 @@ class RecorderThread(Thread):
         self.recording_dir = recording_dir
         self.expected_timelen = expected_timelen
         self.active = False
+        self.finished = False
         self.fps_window_size = fps_window_size
         self.last_times = np.zeros(self.fps_window_size)
         self.color_timestamps = []
@@ -268,6 +305,7 @@ class RecorderThread(Thread):
                              fps=self.kinect.fps, preset="ultrafast") as depth_writer:
             self.color_timestamps = []
             self.depth_timestamps = []
+            self.system_frameget_timestamps = []
             self.system_color_timestamps = []
             self.system_depth_timestamps = []
             self.last_times = np.zeros(self.fps_window_size)
@@ -279,9 +317,10 @@ class RecorderThread(Thread):
             logger.info("Recording started")
             while self.active:
                 try:
-                    color, depth, color_ts, depth_ts, system_color_ts, system_depth_ts = self.kinect.get_next_frame()
+                    color, depth, color_ts, depth_ts, system_color_ts, system_depth_ts, system_frame_ts = self.kinect.get_next_frame()
                 except Kinect.FrameGetFailException as e:
                     self.active = False
+                    self.finished = True
                     self.exception = e
                 else:
                     color_writer.write(color)
@@ -290,11 +329,13 @@ class RecorderThread(Thread):
                     self.depth_timestamps.append(depth_ts)
                     self.system_color_timestamps.append(system_color_ts)
                     self.system_depth_timestamps.append(system_depth_ts)
+                    self.system_frameget_timestamps.append(system_frame_ts)
                     self.last_times = np.roll(self.last_times, -1)
                     curr_time = time.time()
                     self.last_times[-1] = time.time()
                     if curr_time - stime >= self.expected_timelen:
                         self.active = False
+                        self.finished = True
         if self.final_callback is not None:
             self.final_callback()
 
@@ -304,10 +345,12 @@ class RecorderThread(Thread):
 
     def start_recording(self):
         self.active = True
+        self.finished = False
         self.start()
 
     def close_recording(self):
         self.active = False
+        self.finished = True
 
 
 class MainController:
@@ -335,7 +378,7 @@ class MainController:
         self.sendfile_packet_size = 100_000
 
     def start_kinect(self):
-        self.kinect.start()
+        self.kinect.camera_start()
 
     def get_preview_frame(self, color_scale: Union[float, int], depth_scale: Optional[int]):
         def int_scale(img, scale: int):
@@ -343,7 +386,7 @@ class MainController:
                 img = img[::scale, ::scale]
             return img
 
-        color, depth, color_ts, depth_ts, system_color_ts, system_depth_ts = self.kinect.get_next_frame()
+        color, depth, color_ts, depth_ts, system_color_ts, system_depth_ts, system_frameget_ts = self.kinect.get_next_frame()
         if isinstance(color_scale, int):
             color = int_scale(color, color_scale)
         else:
@@ -360,13 +403,13 @@ class MainController:
             return color, None, color_ts, None
 
     def stop_kinect(self):
-        self.kinect.stop()
+        self.kinect.camera_stop()
 
     @staticmethod
     def get_recording_dirname(recording_id, recording_name):
         return f"{recording_id}_{recording_name}"
 
-    def start_recording(self, recording_id, recording_name, recording_duration, server_time, participating_kinects,
+    def initialize_recording(self, recording_id, recording_name, recording_duration, participating_kinects,
             start_delay=0):
         curr_recording_dir = os.path.join(self.recordings_dir,
                                           self.get_recording_dirname(recording_id, recording_name))
@@ -376,11 +419,16 @@ class MainController:
         logger.info("Creating metadata")
         self.start_kinect()
         self.kinect.update_calibration()
-        self.recording_metadata = {"id": recording_id, "name": recording_name, "server_time": server_time,
+        self.recording_metadata = {"id": recording_id, "name": recording_name,
                                    "participating_kinects": list(participating_kinects),
                                    "kinect_id": self.kinect.id, "kinect_calibration": self.kinect.calibration_dict,
-                                   "start_params": self.kinect.start_params}
+                                   "start_params": self.kinect.start_params, "start_delay": start_delay}
         self.recorder = RecorderThread(self.kinect, curr_recording_dir, recording_duration, start_delay=start_delay)
+        logger.info("Recording initialized, ready to start")
+        return self.kinect.active
+
+    def start_recording(self, server_time):
+        self.recording_metadata["server_time"] = server_time
         logger.info("Starting recorder thread")
         self.recorder.start_recording()
 
@@ -389,9 +437,10 @@ class MainController:
         logger.info("Waiting for recorder thread to finish")
         self.recorder.join()
         logger.info("Writing timestamps and metadata")
-        timestamps = {"color": self.recorder.color_timestamps, "depth": self.recorder.depth_timestamps,
-                      "system_color": self.recorder.system_color_timestamps,
-                      "system_depth": self.recorder.system_depth_timestamps}
+        timestamps = {"device_color_usec": self.recorder.color_timestamps, "device_depth_usec": self.recorder.depth_timestamps,
+                      "monotonic_color_nsec": self.recorder.system_color_timestamps,
+                      "monotonic_depth_nsec": self.recorder.system_depth_timestamps,
+                      "system_received_usec": self.recorder.system_frameget_timestamps}
         json.dump(timestamps, open(os.path.join(self.recorder.recording_dir, "times.json"), "w"), indent=0)
         if new_server_time is None:
             self.recording_metadata["duration"] = self.recorder.expected_timelen
@@ -465,7 +514,7 @@ class MainController:
 
     def handle_recording(self):
         if self.recorder is not None:
-            if not self.recorder.active:
+            if self.recorder.finished:
                 self.finalize_recording()
                 self.net.send({"type": "pong", "cmd_report": statusd("stop_recording")})
 
@@ -548,13 +597,18 @@ class MainController:
                         statusd(msgt, "kinect fail", f"Kinect is not activated")})
                 else:
                     self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
-            elif msgt == "start_recording":
+            elif msgt == "init_recording":
                 try:
-                    self.start_recording(msg["recording_id"], msg["recording_name"], msg["recording_duration"],
-                                         msg["server_time"], msg["participating_kinects"], msg["start_delay"])
+                    self.initialize_recording(msg["recording_id"], msg["recording_name"], msg["recording_duration"],
+                                              msg["participating_kinects"], msg["start_delay"])
                 except MainController.RecordingExistsException:
                     self.net.send({"type": "pong", "cmd_report": statusd(msgt, "recorder fail",
                                                                          "Recording already exists")})
+                else:
+                    self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
+            elif msgt == "start_recording":
+                try:
+                    self.start_recording(msg["server_time"])
                 except Kinect.DoubleActivationException:
                     self.net.send({"type": "pong", "cmd_report":
                         statusd(msgt, "recorder fail", f"Kinect is already activated")})
@@ -602,24 +656,23 @@ class MainController:
                 else:
                     self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
             elif msgt == "get_kinect_calibration":
-                was_active = self.kinect.active
                 try:
-                    if not was_active:
-                        self.kinect.start()
                     self.kinect.update_calibration()
                     calibration_dict = self.kinect.calibration_dict
-                    if not was_active:
-                        self.kinect.stop()
-                except Kinect.FrameGetFailException:
+                except Kinect.NotInitializedException:
                     self.net.send({"type": "kinect_calibration", "cmd_report": statusd(msgt, "kinect fail",
-                                                                                       "Failed to activate Kinect")})
+                                                                                       "Kinect is not initialized yet")})
                 else:
                     self.net.send({"type": "kinect_calibration", "cmd_report": statusd(msgt),
                                    "kinect_calibration": calibration_dict, "kinect_id": self.kinect.id})
             elif msgt == "set_kinect_params":
                 self.kinect.update_params(msg["rgb_res"], msg["depth_wfov"], msg["depth_binned"],
-                                          msg["fps"], msg["sync_mode"], msg["sync_capture_delay"])
-                self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
+                                          msg["fps"], msg["sync_mode"], msg["sync_capture_delay"], msg["force_reinit"])
+                if self.kinect.initialized:
+                    self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
+                else:
+                    self.net.send({"type": "pong", "cmd_report": statusd(msgt, "kinect fail",
+                                                                         "Failed to reinitialize Kinect")})
             elif msgt == "get_status":
                 info = ""
                 recording_fps = 0
@@ -634,7 +687,7 @@ class MainController:
                     else:
                         kin_state = "preview"
                 else:
-                    if self.kinect.connected:
+                    if self.kinect.ready:
                         kin_state = "ready"
                     else:
                         kin_state = "kin. not ready"
@@ -659,7 +712,7 @@ class MainController:
                                "optionals": optionals})
             elif msgt == "shutdown":
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})
-                logger.info("Received shutdown message, attempting to call 'sudo shutdown -s now'")
+                logger.info("Received shutdown message, attempting to call 'sudo shutdown now'")
                 os.system("sudo shutdown now")
             elif msgt == "reboot":
                 self.net.send({"type": "pong", "cmd_report": statusd(msgt)})

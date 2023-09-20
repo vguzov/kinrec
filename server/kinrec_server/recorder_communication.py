@@ -33,6 +33,7 @@ class RecorderComm:
         "start_preview_reply",
         "get_preview_frame_reply",
         "stop_preview_reply",
+        "init_recording_reply",
         "start_recording_reply",
         "stop_recording_reply",
         "get_recordings_list_reply",
@@ -156,6 +157,9 @@ class RecorderComm:
                     elif cmdt == "stop_preview":
                         self.controller_callbacks.stop_preview_reply(cmd_result == "OK",
                                                                      info=None if cmd_result == "OK" else cmd_info)
+                    elif cmdt == "init_recording":
+                        self.controller_callbacks.init_recording_reply(cmd_result == "OK",
+                                                                        info=None if cmd_result == "OK" else cmd_info)
                     elif cmdt == "start_recording":
                         self.controller_callbacks.start_recording_reply(cmd_result == "OK",
                                                                         info=None if cmd_result == "OK" else cmd_info)
@@ -269,10 +273,10 @@ class RecorderComm:
     def kinect_alias(self) -> int:
         return self._last_state.kinect_alias
 
-    async def set_kinect_params(self, rgb_res, depth_wfov, depth_binned, fps, sync_mode, sync_capture_delay):
+    async def set_kinect_params(self, rgb_res, depth_wfov, depth_binned, fps, sync_mode, sync_capture_delay, force_reinit=False):
         await self._send({"type": "set_kinect_params", "rgb_res": int(rgb_res), 'depth_wfov': bool(depth_wfov),
                           'depth_binned': bool(depth_binned), 'fps': int(fps), 'sync_mode': sync_mode,
-                          'sync_capture_delay': int(sync_capture_delay)})
+                          'sync_capture_delay': int(sync_capture_delay), 'force_reinit': bool(force_reinit)})
 
     async def get_kinect_calibration(self):
         await self._send({"type": "get_kinect_calibration"})
@@ -303,12 +307,14 @@ class RecorderComm:
     async def stop_preview(self):
         await self._send({"type": "stop_preview"})
 
-    async def start_recording(self, recording_id, recording_name, recording_duration, server_time,
+    async def init_recording(self, recording_id, recording_name, recording_duration,
             participating_kinects, start_delay):
+        await self._send({"type": "init_recording", "recording_id": recording_id, "recording_name": recording_name,
+                          "recording_duration": recording_duration, "participating_kinects": participating_kinects, "start_delay": start_delay})
+
+    async def start_recording(self, server_time):
         self._append_sent_cmd("stop_recording")
-        await self._send({"type": "start_recording", "recording_id": recording_id, "recording_name": recording_name,
-                          "recording_duration": recording_duration, "server_time": server_time,
-                          "participating_kinects": participating_kinects, "start_delay": start_delay})
+        await self._send({"type": "start_recording","server_time": server_time})
 
     async def stop_recording(self, server_time):
         await self._send({"type": "stop_recording", "server_time": server_time})
