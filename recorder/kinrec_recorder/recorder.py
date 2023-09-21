@@ -100,7 +100,7 @@ class Kinect:
 
     def update_params(self, resolution=1440, wfov=False, binned=False, fps=30, sync_mode="none", sync_capture_delay=0, force_reinit=False):
         new_params = dict(resolution=resolution, wfov=wfov, binned=binned, fps=fps, sync_mode=sync_mode,
-                           sync_capture_delay=sync_capture_delay)
+                          sync_capture_delay=sync_capture_delay)
         if self.params is None or new_params != self.params or force_reinit:
             self.params = new_params
             self._color_resolution = self._color_resolutions_dict[resolution]
@@ -113,7 +113,7 @@ class Kinect:
         kin = kinz.Kinect(resolution=resolution, wfov=wfov, binned=binned, framerate=fps, sync_mode=sync_mode,
                           sync_capture_delay=sync_capture_delay, imu_sensors=False)
         self.start_params = dict(resolution=resolution, wfov=wfov, binned=binned, framerate=fps, sync_mode=sync_mode,
-                          sync_capture_delay=sync_capture_delay, imu_sensors=False)
+                                 sync_capture_delay=sync_capture_delay, imu_sensors=False)
         self.device = kin
         self.active = False
 
@@ -170,12 +170,15 @@ class Kinect:
     def _reinitialize(self):
         if self.initialized:
             self.close()
-        self._device_init(**self.params)
+        if kinz.get_connected_kinects_count() > 0:
+            self._device_init(**self.params)
+
+    def try_initialize(self):
+        self._reinitialize()
 
     @property
     def initialized(self) -> bool:
         return self.device is not None
-
 
     @property
     def ready(self) -> bool:
@@ -537,6 +540,10 @@ class MainController:
                            "relative_file_path": current_file_info.relpath, "file_size": size})
             self.current_sendfile = open(current_file_info.path, "rb")
 
+    def handle_kinect_status(self):
+        if not self.kinect.initialized():
+            self.kinect.try_initialize()
+
     def image_encode(self, image: np.ndarray, format: str = "jpeg"):
         fp = io.BytesIO()
         Image.fromarray(image).save(fp, format)
@@ -551,6 +558,7 @@ class MainController:
                 self.active = False
                 break
             msg = self.net.get(wait=False)
+            self.handle_kinect_status()
             self.handle_recording()
             self.handle_sendfile()
             if msg is None:
