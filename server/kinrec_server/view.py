@@ -22,9 +22,10 @@ class KinRecView(ttk.Frame):
         self.parent = parent
         self.pack(fill="both", expand=True)
         self.columnconfigure(2, weight=1)  # 2 is the column with the RecordsBrowser
-        self.rowconfigure((1,2), weight=1)  # Make RecordsBrowser resizable
+        self.rowconfigure((1, 2), weight=1)  # Make RecordsBrowser resizable
         self._controller = None
         self.number_of_kinects = number_of_kinects
+        self._n_side_frames = 0  # number of opened frames to the side of the main one (e.g. records browser, preview)
 
         # Variables to store state of the system
         self._state_template_kinect = "Status: {}\nFree space: {:03d} GB\nBatt. power: {:03d}%{:s}"
@@ -71,8 +72,17 @@ class KinRecView(ttk.Frame):
         # ]
         #
         # self.window = sg.Window("Kinect Recorder GUI", self.layout, resizable=True)
-        self._browser_size = (1000, 300 + self.number_of_kinects * 50)
-        
+
+    def _get_window_size(self):
+        # get the size of the main window depending on the number of opened side frames
+        # e.g. preview or records browser
+        if self._n_side_frames == 0:
+            return self.parent._default_size
+        elif self._n_side_frames == 1:
+            return (1200, 300 + self.number_of_kinects * 70)
+        else:
+            return (1920, 1080)
+
     def _init_view_state(self):
         self.state = {
             "kinect": {
@@ -86,8 +96,8 @@ class KinRecView(ttk.Frame):
                 "name": tk.StringVar(value=""),
                 "duration": tk.StringVar(value="-1"),
                 "delay": tk.StringVar(value="0")
-                #"duration": tk.IntVar(value=-1),
-                #"delay": tk.IntVar(value=-0)
+                # "duration": tk.IntVar(value=-1),
+                # "delay": tk.IntVar(value=-0)
             },
             "recordings_list": {
                 "is_on": tk.BooleanVar(value=False),
@@ -118,6 +128,7 @@ class KinRecView(ttk.Frame):
         self.parent.config(menu=self.menubar)
 
     def _add_preview_frame(self):
+        # Move preview to a separate window?
         self.preview_frame = FocusLabelFrame(self, text="Preview")
         self.preview_frame.rowconfigure(0, weight=1)
         self.preview_frame.columnconfigure(0, weight=1)
@@ -125,10 +136,10 @@ class KinRecView(ttk.Frame):
         self.preview_canvas = tk.Canvas(self.preview_frame, highlightthickness=0, cursor="hand1",
                                         width=self._preview_frame_size[0], height=self._preview_frame_size[1])
         self.preview_image = None
-        self.preview_canvas.grid(row=0, column=0, sticky='nw', padx=5, pady=5)
+        self.preview_canvas.grid(row=0, column=0, sticky='news', padx=5, pady=5)
 
-        # self.preview_frame.pack(side=tk.LEFT, fill="both", expand=True, padx=5, pady=5)
-        self.preview_frame.grid(row=1, rowspan=3, column=0, sticky="ne", padx=5, pady=5)
+        self._preview_frame_grid = {"row": 1, "rowspan": 2, "sticky": "news", "padx": 5, "pady": 5}
+        self.preview_frame.grid(column=self._n_side_frames + 1, **self._preview_frame_grid)
         self.preview_frame.grid_remove()
 
     def _add_records_browser_frame(self):
@@ -144,9 +155,9 @@ class KinRecView(ttk.Frame):
             # reverse sort next time
             treeview.heading(
                 column, command=lambda _column=column: \
-                _browser_sort_column(treeview, _column, not reverse)
+                    _browser_sort_column(treeview, _column, not reverse)
             )
-        
+
         # Main frame that holds everything
         self.browser_frame = FocusLabelFrame(self, text="Browse recordings")
         self.browser_frame.rowconfigure((0, 1), weight=1)
@@ -172,9 +183,9 @@ class KinRecView(ttk.Frame):
         for column in columns:
             self.browser_frame_tree.heading(
                 column, text=column.capitalize(), command=lambda _column=column: \
-                _browser_sort_column(self.browser_frame_tree, _column, False)
+                    _browser_sort_column(self.browser_frame_tree, _column, False)
             )
-        
+
         # Subframe with download button and progressbar
         browser_progress_subframe = FocusLabelFrame(self.browser_frame, text="Collection")
         browser_progress_subframe.grid(row=2, column=0, columnspan=2, sticky="ns")
@@ -183,13 +194,13 @@ class KinRecView(ttk.Frame):
         FocusButton(browser_progress_subframe, text='Delete', width=7,
                     command=self._callback_records_verify_delete).grid(row=0, column=1, padx=5, pady=5)
 
-        self.browser_frame.grid(row=1, rowspan=2, column=2, sticky="news", padx=5, pady=5)
+        self._browser_frame_grid = {"row": 1, "rowspan": 2, "sticky": "news", "padx": 5, "pady": 5}
+        self.browser_frame.grid(column=self._n_side_frames + 1, **self._browser_frame_grid)
         self.browser_frame.grid_remove()
 
     def _add_left_column_frame(self):
         self.left_column_frame = FocusLabelFrame(self, borderwidth=0)
         self.left_column_frame.grid(row=1, column=0, sticky="n")
-
 
     def _add_params_frame(self, parent):
         self.params_frame = FocusLabelFrame(parent, text="Recording parameters")
@@ -277,9 +288,9 @@ class KinRecView(ttk.Frame):
         for recorder_index in range(self.number_of_kinects):
             # TODO default state tk.DISABLED
             # TODO add sorting based on kinect_id
-            self._recorders[recorder_index]["button"] = FocusButton(root, text="",
-                                                                    command=partial(self._callback_preview,
-                                                                                    recorder_index))
+            self._recorders[recorder_index]["button"] = FocusButton(
+                root, text="", command=partial(self._callback_preview, recorder_index)
+            )
             self._recorders[recorder_index]["button"].grid(row=3 + recorder_index, column=1, padx=5, pady=1,
                                                            sticky='ew')
 
@@ -307,6 +318,7 @@ class KinRecView(ttk.Frame):
                 tmp_window.destroy()
         except tk.TclError:
             pass
+
     # ==================================================================================================================
 
     # =============================================== External Interfaces ==============================================
@@ -324,7 +336,9 @@ class KinRecView(ttk.Frame):
             # preview is not launched
             self.state["preview"]["is_on"].set(True)
             self.state["preview"]["recorder_index"].set(recorder_index)
-            self.preview_frame.grid()
+            self.preview_frame.grid(column=self._n_side_frames + 2, **self._preview_frame_grid)
+            self._n_side_frames += 1  # the column is occupied
+            self.parent.geometry("{}x{}".format(*self._get_window_size()))
             logger.info(f"launched preview for {recorder_index}")
         self._update_preview_buttons_state()
 
@@ -332,12 +346,14 @@ class KinRecView(ttk.Frame):
         if self.state["preview"]["is_on"].get():
             if self.state["preview"]["recorder_index"].get() == recorder_index:
                 self.preview_frame.grid_remove()
+                self._n_side_frames -= 1  # the column is freed
                 self.state["preview"]["is_on"].set(False)
                 self.state["preview"]["recorder_index"].set(-1)
 
                 self.preview_canvas.delete("preview_iamge")
                 self.preview_image = None
 
+                self.parent.geometry("{}x{}".format(*self._get_window_size()))
                 logger.info(f"stopped preview for {recorder_index}")
             else:
                 logger.warning(f"Can't stop preview for {recorder_index}, "
@@ -432,7 +448,7 @@ class KinRecView(ttk.Frame):
         # Change button style
         self._update_recording_button_state(state="not recording")
 
-    def browse_recordings_reply(self, recordings_database: Dict[int, RecordsEntry]):        
+    def browse_recordings_reply(self, recordings_database: Dict[int, RecordsEntry]):
         for index, (recording_id, recording) in enumerate(recordings_database.items()):
             date_str = datetime.fromtimestamp(recording.date).strftime("%Y-%m-%d, %H:%M")
             if recording.length < 0:
@@ -441,12 +457,13 @@ class KinRecView(ttk.Frame):
                 length_str = timedelta(seconds=recording.length)
                 length_str = timedelta(seconds=math.ceil(length_str.total_seconds()))
             params_str = "\n".join([f"{k}: {v}" for k, v in recording.params.to_dict().items()])
-            size_str = f"{recording.size/2**20:6.1f} MB"
+            size_str = f"{recording.size / 2 ** 20:6.1f} MB"
 
             self.browser_frame_tree.insert(
                 "", "end", iid=str(recording_id),
                 values=(date_str, recording.name, length_str, size_str, recording.status)
             )
+
     # ==================================================================================================================
 
     # ================================================ Button callbacks ================================================
@@ -459,18 +476,20 @@ class KinRecView(ttk.Frame):
         if self.state["recordings_list"]["is_on"].get():
             self.state["recordings_list"]["is_on"].set(False)
             self.browser_frame.grid_remove()
+            self._n_side_frames -= 1  # column is freed
             self.recording_browse_button.configure(text="Browse\nrecordings")
             # cleaning of old database
             self.browser_frame_tree.delete(*self.browser_frame_tree.get_children())
             # restore initial size
-            self.parent.geometry("{}x{}".format(*self.parent._default_size))
+            self.parent.geometry("{}x{}".format(*self._get_window_size()))
         else:
             self.state["recordings_list"]["is_on"].set(True)
-            self.browser_frame.grid()
+            self.browser_frame.grid(column=self._n_side_frames + 2, **self._browser_frame_grid)
+            self._n_side_frames += 1  # column is occupied
             self.recording_browse_button.configure(text="Close\nbrowser")
             # TODO move to a separate button
             self._controller.collect_recordings_info()
-            self.parent.geometry("{}x{}".format(*self._browser_size))
+            self.parent.geometry("{}x{}".format(*self._get_window_size()))
 
     def _callback_rgb_res(self, *args):
         self._update_apply_button_state(state="not applied")
@@ -511,7 +530,7 @@ class KinRecView(ttk.Frame):
         recording_ids_to_collect = [int(i) for i in recording_ids_to_collect]
 
         if len(recording_ids_to_collect) == 0:
-           self.add_destroyable_message("Warning", "No recordings selected")
+            self.add_destroyable_message("Warning", "No recordings selected")
         else:
             self._controller.collect_recordings(recording_ids_to_collect)
 
@@ -519,12 +538,12 @@ class KinRecView(ttk.Frame):
         recording_ids_to_delete = list(self.browser_frame_tree.selection())
         recording_ids_to_delete = [int(i) for i in recording_ids_to_delete]
         n_recordings = len(recording_ids_to_delete)
-        
+
         if n_recordings == 0:
             self.add_destroyable_message("Warning", "No recordings selected")
         else:
             msg_box = tk.messagebox.askquestion(
-                'Records deletion', 
+                'Records deletion',
                 f'Are you sure you want to delete the selected {n_recordings} recording(-s)?',
                 icon='warning'
             )
@@ -559,11 +578,13 @@ class KinRecView(ttk.Frame):
     def _callback_exit(self):
         # TODO check if warning can be escaped
         self.parent.destroy()
+
     # ==================================================================================================================
 
     def _update_kinect_params_view(self, params: KinectParams):
         self.state["kinect"]["rgb_res"].set(value=self.kinect_params._rgb_res_val2str[params.rgb_res])
-        self.state["kinect"]["depth_mode"].set(value=self.kinect_params._depth_mode_val2str[(params.depth_wfov , params.depth_binned)])
+        self.state["kinect"]["depth_mode"].set(
+            value=self.kinect_params._depth_mode_val2str[(params.depth_wfov, params.depth_binned)])
         self.state["kinect"]["fps"].set(value=params.fps)
         self.state["kinect"]["sync"].set(value=params.sync)
 
@@ -585,7 +606,7 @@ class KinRecView(ttk.Frame):
         else:
             self.apply_params_button.configure(text="In Progress", style="InProgress.TButton")
 
-    def _update_recording_button_state(self, state:str):
+    def _update_recording_button_state(self, state: str):
         assert state in ["recording", "not recording", "waiting"], \
             f'state must be in ["recording", "not recording", "waiting"], got {state}'
         if state == "recording":
@@ -603,8 +624,9 @@ class KinRecView(ttk.Frame):
             kinect_alias = self._recorders[recorder_index]["state"].kinect_alias
             if preview_is_on:
                 if recorder_index == preview_recorder_index:
-                    self._recorders[recorder_index]["button"].configure(text=f"Kinect id {kinect_alias}\n(stop preview)",
-                                                                        state=tk.NORMAL)
+                    self._recorders[recorder_index]["button"].configure(
+                        text=f"Kinect id {kinect_alias}\n(stop preview)",
+                        state=tk.NORMAL)
                 else:
                     self._recorders[recorder_index]["button"].configure(state=tk.DISABLED)
             else:
