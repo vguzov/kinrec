@@ -182,6 +182,8 @@ class Kinect:
 
     @property
     def ready(self) -> bool:
+        if not self.initialized:
+            return False
         try:
             self.device.get_serial_number()
         except Exception as e:
