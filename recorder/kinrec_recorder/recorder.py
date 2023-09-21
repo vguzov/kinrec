@@ -541,7 +541,7 @@ class MainController:
             self.current_sendfile = open(current_file_info.path, "rb")
 
     def handle_kinect_status(self):
-        if not self.kinect.initialized():
+        if not self.kinect.initialized:
             self.kinect.try_initialize()
 
     def image_encode(self, image: np.ndarray, format: str = "jpeg"):
