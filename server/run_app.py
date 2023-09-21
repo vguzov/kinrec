@@ -22,8 +22,9 @@ if __name__ == "__main__":
     parser = ArgumentParser("Kinect recorder system -- Main server script")
     parser.add_argument("-w", "--workdir", default="./kinrec")
     parser.add_argument("-host", "--hostname", default="192.168.1.40:4400")  # kinrec.cv:4400
+    parser.add_argument("-n", "--number_of_kinects", type=int, default=4)
     args = parser.parse_args()
     # Create the class
-    test_gui = KinRecApp(number_of_kinects=4, workdir=args.workdir, server_address=args.hostname)
+    test_gui = KinRecApp(number_of_kinects=args.number_of_kinects, workdir=args.workdir, server_address=args.hostname)
     # run the event loop
     test_gui.start()
