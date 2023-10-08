@@ -12,6 +12,7 @@ logger = logging.getLogger("KR.nethandler")
 
 
 class NetHandler:
+    NET_MESSAGE_MAX_SIZE = 100 * 2 ** 20  # 100 MB
     class StopEvent:
         pass
 
@@ -116,7 +117,7 @@ class NetHandler:
         while not connected:
             try:
                 logger.info("Trying to connect WS")
-                self._websocket = await websockets.connect("ws://" + self.serveraddr)
+                self._websocket = await websockets.connect("ws://" + self.serveraddr, max_size=self.NET_MESSAGE_MAX_SIZE)
             except ConnectionRefusedError as e:
                 logger.info("Connection refused, trying again")
                 time.sleep(2)

@@ -18,6 +18,7 @@ logger = logging.getLogger("KRS.application")
 
 
 class KinRecApp(tk.Tk):
+    NET_MESSAGE_MAX_SIZE = 100 * 2 ** 20  # 100 MB
     def __init__(self, number_of_kinects: int, server_address: str = "kinrec.cv:4400", workdir: str = "./kinrec",
             status_update_period: float = 2.0):
         super().__init__()
@@ -89,7 +90,7 @@ class KinRecApp(tk.Tk):
 
     async def recorder_server_loop(self, stop_event: asyncio.Event):
         host, port = self.server_address.split(":")
-        async with websockets.serve(self.handle_new_recorder_connection, host, int(port)):
+        async with websockets.serve(self.handle_new_recorder_connection, host, int(port), max_size=self.NET_MESSAGE_MAX_SIZE):
             await stop_event.wait()
 
     async def status_update_loop(self):
