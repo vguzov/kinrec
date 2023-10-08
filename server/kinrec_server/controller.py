@@ -40,6 +40,7 @@ class KinRecController:
         self._last_kinect_params = KinectParams()
         self._params_applied_responses = {}
         self._recordings_database: Dict[int, RecordsEntry] = {}
+        # self._recordings_database_lock = asyncio.Lock()
         self._recorder_reclist_responses = {}
         self._sync_capture_delay = 160  # in microseconds
         self._master_recorder = None
@@ -264,17 +265,20 @@ class KinRecController:
                     f"Recording {rec_id} cannot be collected: the following kinects are missing {participating_kinects - ready_kinects}")
         await asyncio.gather(*routines)
 
-    async def _delete_recordings(self, recordings_to_delete):
+    async def _delete_recordings(self, recordings_to_delete, update_after_deletion=False):
         for rec_id in recordings_to_delete:
             curr_routines = []
             logger.info(f"Deleting recording {rec_id} from kinects")
             recording = self._recordings_database[rec_id]
             participating_kinects = set(recording.participating_kinects)
-            # TODO look into the actual recorders with this recording saved
             for recorder_id, recorder in self._connected_recorders.items():
-                if recorder.kinect_id in participating_kinects:
-                    curr_routines.append(recorder.delete_recording(rec_id))
+                if rec_id in self._recorderwise_reclists[recorder_id]:
+                    recorder_recording_kinect_id = self._recorderwise_reclists[recorder_id][rec_id]["kinect_id"]
+                    if recorder_recording_kinect_id in participating_kinects:
+                        curr_routines.append(recorder.delete_recording(rec_id))
             await asyncio.gather(*curr_routines)
+        if update_after_deletion:
+            await self._collect_recordings_info()
 
     ### Actions ###
     def start_preview(self, recorder_id: int) -> bool:
@@ -318,15 +322,20 @@ class KinRecController:
     def collect_recordings(self, recording_ids: Sequence[int]):
         asyncio.create_task(self._collect_recordings(recording_ids))
 
-    def delete_recordings(self, recording_ids: Sequence[int]):
-        asyncio.create_task(self._delete_recordings(recording_ids))
+    def delete_recordings(self, recording_ids: Sequence[int], update_after_deletion: bool = False):
+        asyncio.create_task(self._delete_recordings(recording_ids, update_after_deletion=update_after_deletion))
 
-    def collect_recordings_info(self):
+    async def _collect_recordings_info(self):
         self._recordings_database = {}
         self._recorder_reclist_responses = {}
+        curr_routines = []
         for recorder_id, recorder in self._connected_recorders.items():
             self._recorder_reclist_responses[recorder_id] = None
-            asyncio.create_task(recorder.get_recordings_list())
+            curr_routines.append(recorder.get_recordings_list())
+        await asyncio.gather(*curr_routines)
+
+    def collect_recordings_info(self):
+        asyncio.create_task(self._collect_recordings_info())
 
     def shutdown(self):
         for recorder_id, recorder in self._connected_recorders.items():

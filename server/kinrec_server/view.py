@@ -548,10 +548,8 @@ class KinRecView(ttk.Frame):
                 icon='warning'
             )
             if msg_box == 'yes':
-                self._controller.delete_recordings(recording_ids_to_delete)
-                # update list after deletion
                 self.browser_frame_tree.delete(*self.browser_frame_tree.get_children())
-                self._controller.collect_recordings_info()
+                self._controller.delete_recordings(recording_ids_to_delete, update_after_deletion=True)
             else:
                 pass
 
